@@ -7,44 +7,29 @@ SNAPSHOTS_DIR="$ROOT_DIR/snapshots"
 PLAYLISTS_FILE="$ROOT_DIR/playlists.json"
 TODAY="$(date -u +%Y-%m-%d)"
 
-# --- Auth ---
-
-get_token() {
-  local response
-  response=$(curl -sf -X POST https://accounts.spotify.com/api/token \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials&client_id=${SPOTIFY_CLIENT_ID}&client_secret=${SPOTIFY_CLIENT_SECRET}")
-  echo "$response" | jq -r '.access_token'
-}
-
-# --- Fetch all tracks (handles pagination) ---
+# --- Fetch tracks from Spotify embed page (no auth needed) ---
 
 fetch_tracks() {
   local playlist_id="$1"
-  local token="$2"
-  local url="https://api.spotify.com/v1/playlists/${playlist_id}/tracks?fields=items(added_at,track(name,artists(name),album(name),external_urls(spotify),duration_ms)),next&limit=100"
-  local all_items="[]"
+  local html
+  html=$(curl -sL "https://open.spotify.com/embed/playlist/${playlist_id}" \
+    -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
 
-  while [ "$url" != "null" ] && [ -n "$url" ]; do
-    local response
-    response=$(curl -sf "$url" -H "Authorization: Bearer $token")
+  # Extract __NEXT_DATA__ JSON from the embed page
+  local json
+  json=$(echo "$html" | sed -n 's/.*<script id="__NEXT_DATA__" type="application\/json">\(.*\)<\/script>.*/\1/p')
 
-    local items
-    items=$(echo "$response" | jq '[.items[] | select(.track != null) | {
-      name: .track.name,
-      artists: [.track.artists[].name],
-      album: .track.album.name,
-      added_at: .added_at,
-      spotify_url: .track.external_urls.spotify,
-      duration_ms: .track.duration_ms
-    }]')
+  if [ -z "$json" ]; then
+    echo "Error: Could not extract track data for playlist $playlist_id" >&2
+    return 1
+  fi
 
-    all_items=$(echo "$all_items" "$items" | jq -s '.[0] + .[1]')
-
-    url=$(echo "$response" | jq -r '.next')
-  done
-
-  echo "$all_items" | jq 'sort_by(.spotify_url)'
+  echo "$json" | jq '[.props.pageProps.state.data.entity.trackList[] | {
+    name: .title,
+    artists: [.subtitle],
+    spotify_url: ("https://open.spotify.com/track/" + (.uri | split(":") | last)),
+    duration_ms: .duration
+  }] | sort_by(.spotify_url)'
 }
 
 # --- Compare with latest snapshot ---
@@ -97,20 +82,6 @@ generate_index() {
 # --- Main ---
 
 main() {
-  if [ -z "${SPOTIFY_CLIENT_ID:-}" ] || [ -z "${SPOTIFY_CLIENT_SECRET:-}" ]; then
-    echo "Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set" >&2
-    exit 1
-  fi
-
-  echo "Authenticating with Spotify..."
-  local token
-  token=$(get_token)
-
-  if [ -z "$token" ] || [ "$token" = "null" ]; then
-    echo "Error: Failed to get access token" >&2
-    exit 1
-  fi
-
   local any_changed=false
   local playlist_count
   playlist_count=$(jq length "$PLAYLISTS_FILE")
@@ -125,7 +96,7 @@ main() {
     mkdir -p "$playlist_dir"
 
     local tracks
-    tracks=$(fetch_tracks "$id" "$token")
+    tracks=$(fetch_tracks "$id")
     local track_count
     track_count=$(echo "$tracks" | jq length)
 

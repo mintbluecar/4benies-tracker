@@ -2,6 +2,31 @@
   "playlist_id": "1FvNFiqtjKeUTMvE0eIFNf",
   "playlist_name": "4benies",
   "snapshot_date": "2026-08-26",
-  "track_count": 0,
-  "tracks": []
+  "track_count": 3,
+  "tracks": [
+    {
+      "name": "ฉันดีใจที่ได้พบเธอ (The Golden Song)",
+      "artists": [
+        "Whal & Dolph"
+      ],
+      "spotify_url": "https://open.spotify.com/track/0zFbdbgKOLQQDPFAvboW1l",
+      "duration_ms": 169374
+    },
+    {
+      "name": "ให้เพลงของฉันอยู่เป็นเพื่อนเธอ",
+      "artists": [
+        "Ptee"
+      ],
+      "spotify_url": "https://open.spotify.com/track/178F5jcmFC5GGpStNZy7dP",
+      "duration_ms": 189884
+    },
+    {
+      "name": "แค่วันพรุ่งนี้ที่ไม่มีเรา",
+      "artists": [
+        "Dept"
+      ],
+      "spotify_url": "https://open.spotify.com/track/7GIyvYqLFklCmiDlanb4gO",
+      "duration_ms": 279344
+    }
+  ]
 }
