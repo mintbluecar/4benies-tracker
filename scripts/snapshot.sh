@@ -24,12 +24,16 @@ fetch_tracks() {
     return 1
   fi
 
-  echo "$json" | jq '[.props.pageProps.state.data.entity.trackList[] | {
-    name: .title,
-    artists: [.subtitle],
-    spotify_url: ("https://open.spotify.com/track/" + (.uri | split(":") | last)),
-    duration_ms: .duration
-  }] | sort_by(.spotify_url)'
+  echo "$json" | jq '{
+    cover_art: (.props.pageProps.state.data.entity.coverArt.sources[0].url // null),
+    owner: (.props.pageProps.state.data.entity.subtitle // null),
+    tracks: [.props.pageProps.state.data.entity.trackList[] | {
+      name: .title,
+      artists: [.subtitle],
+      spotify_url: ("https://open.spotify.com/track/" + (.uri | split(":") | last)),
+      duration_ms: .duration
+    }] | sort_by(.spotify_url)
+  }'
 }
 
 # --- Compare with latest snapshot ---
@@ -95,9 +99,12 @@ main() {
     local playlist_dir="$SNAPSHOTS_DIR/$id"
     mkdir -p "$playlist_dir"
 
-    local tracks
-    tracks=$(fetch_tracks "$id")
-    local track_count
+    local result
+    result=$(fetch_tracks "$id")
+    local tracks cover_art owner track_count
+    tracks=$(echo "$result" | jq '.tracks')
+    cover_art=$(echo "$result" | jq -r '.cover_art // empty')
+    owner=$(echo "$result" | jq -r '.owner // empty')
     track_count=$(echo "$tracks" | jq length)
 
     if has_changed "$playlist_dir" "$tracks"; then
@@ -108,11 +115,15 @@ main() {
         --arg date "$TODAY" \
         --argjson count "$track_count" \
         --argjson tracks "$tracks" \
+        --arg cover_art "$cover_art" \
+        --arg owner "$owner" \
         '{
           playlist_id: $pid,
           playlist_name: $pname,
           snapshot_date: $date,
           track_count: $count,
+          cover_art: (if $cover_art == "" then null else $cover_art end),
+          owner: (if $owner == "" then null else $owner end),
           tracks: $tracks
         }' > "$playlist_dir/$TODAY.json"
       any_changed=true

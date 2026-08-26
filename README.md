@@ -35,6 +35,8 @@ Each snapshot contains:
   "playlist_name": "...",
   "snapshot_date": "2026-08-26",
   "track_count": 3,
+  "cover_art": "https://image-cdn-fa.spotifycdn.com/image/...",
+  "owner": "username",
   "tracks": [
     {
       "name": "Song Title",
