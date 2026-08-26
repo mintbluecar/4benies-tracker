@@ -261,11 +261,36 @@
   .diff-summary {
     font-size: 0.75rem;
     color: var(--text-secondary);
-    margin-left: auto;
   }
 
   .diff-summary .added-text { color: var(--green-soft); }
   .diff-summary .removed-text { color: var(--red); }
+
+  .diff-toggle {
+    margin-left: auto;
+    font-size: 0.75rem;
+    font-family: inherit;
+    font-weight: 500;
+    padding: 0.25rem 0.6rem;
+    border-radius: 5px;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    background: none;
+    color: var(--text-secondary);
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .diff-toggle:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .diff-toggle.active {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green-soft);
+  }
 
   /* Track list */
   .track-list {
@@ -441,6 +466,10 @@ let selectedDate = null;
 let snapshotCache = {};
 let currentCoverArt = null;
 let currentOwner = null;
+let showDiff = false;
+let lastSnap = null;
+let lastPrevSnap = null;
+let lastRequestedDate = null;
 
 async function fetchJSON(url) {
   const res = await fetch(url);
@@ -593,19 +622,34 @@ async function loadSnapshot(snapshotDate, requestedDate) {
       prevSnap = snapshotCache[prevKey];
     }
 
-    renderTracks(snap, prevSnap, requestedDate);
+    lastSnap = snap;
+    lastPrevSnap = prevSnap;
+    lastRequestedDate = requestedDate;
+    showDiff = false;
+    renderTracks();
   } catch (err) {
     section.innerHTML = `<div class="empty-state">Failed to load snapshot: ${err.message}</div>`;
   }
 }
 
-function renderTracks(snap, prevSnap, requestedDate) {
+function toggleDiff() {
+  showDiff = !showDiff;
+  renderTracks();
+}
+
+function renderTracks() {
+  const snap = lastSnap;
+  const prevSnap = lastPrevSnap;
+  const requestedDate = lastRequestedDate;
+  if (!snap) return;
+
   const section = document.getElementById('trackSection');
 
   const currentUrls = new Set(snap.tracks.map(t => t.spotify_url));
   const prevUrls = prevSnap ? new Set(prevSnap.tracks.map(t => t.spotify_url)) : new Set();
   const added = prevSnap ? new Set([...currentUrls].filter(u => !prevUrls.has(u))) : new Set();
   const removedTracks = prevSnap ? prevSnap.tracks.filter(t => !currentUrls.has(t.spotify_url)) : [];
+  const hasDiff = prevSnap && (added.size > 0 || removedTracks.length > 0);
 
   let barHtml = '<div class="snapshot-bar">';
   barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
@@ -616,32 +660,35 @@ function renderTracks(snap, prevSnap, requestedDate) {
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  if (prevSnap && (added.size > 0 || removedTracks.length > 0)) {
+  if (hasDiff) {
     const parts = [];
     if (added.size > 0) parts.push(`<span class="added-text">+${added.size}</span>`);
     if (removedTracks.length > 0) parts.push(`<span class="removed-text">−${removedTracks.length}</span>`);
     barHtml += `<span class="diff-summary">${parts.join(' ')}</span>`;
+    barHtml += `<button class="diff-toggle${showDiff ? ' active' : ''}" onclick="toggleDiff()">diff</button>`;
   }
 
   barHtml += '</div>';
 
   let listHtml = '<ul class="track-list">';
 
-  removedTracks.forEach(t => {
-    listHtml += `
-      <li class="track removed">
-        <span class="diff-badge removed-badge">−</span>
-        <div class="track-info">
-          <div class="track-name">${escapeHtml(t.name)}</div>
-          <div class="track-artist">${escapeHtml(t.artists.join(', '))}</div>
-        </div>
-        <span class="track-duration">${formatDuration(t.duration_ms)}</span>
-        <a class="track-link" href="${t.spotify_url}" target="_blank" rel="noopener">${SPOTIFY_ICON}</a>
-      </li>`;
-  });
+  if (showDiff && hasDiff) {
+    removedTracks.forEach(t => {
+      listHtml += `
+        <li class="track removed">
+          <span class="diff-badge removed-badge">−</span>
+          <div class="track-info">
+            <div class="track-name">${escapeHtml(t.name)}</div>
+            <div class="track-artist">${escapeHtml(t.artists.join(', '))}</div>
+          </div>
+          <span class="track-duration">${formatDuration(t.duration_ms)}</span>
+          <a class="track-link" href="${t.spotify_url}" target="_blank" rel="noopener">${SPOTIFY_ICON}</a>
+        </li>`;
+    });
+  }
 
   snap.tracks.forEach((t, i) => {
-    const isAdded = added.has(t.spotify_url);
+    const isAdded = showDiff && hasDiff && added.has(t.spotify_url);
     const cls = isAdded ? 'track added' : 'track';
     const badge = isAdded
       ? '<span class="diff-badge added-badge">+</span>'
