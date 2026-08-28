@@ -670,7 +670,7 @@ function renderTracks() {
   barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
 
   if (requestedDate) {
-    barHtml += `<span class="snapshot-meta">nearest to ${requestedDate}</span>`;
+    barHtml += `<span class="snapshot-meta">last updated on ${snap.snapshot_date}</span>`;
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
