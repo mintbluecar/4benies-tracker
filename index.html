@@ -565,7 +565,8 @@ function renderCalendar() {
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const isSnapshotDate = snapshotSet.has(dateStr);
-    const canRender = firstSnap && dateStr >= firstSnap && dateStr <= lastSnap_;
+    const today = new Date().toISOString().slice(0, 10);
+    const canRender = firstSnap && dateStr >= firstSnap && dateStr <= today;
     const isSelected = dateStr === selectedDate;
     const classes = ['cal-day'];
     if (canRender) classes.push('has-snapshot');
