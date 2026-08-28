@@ -102,6 +102,16 @@
     text-overflow: ellipsis;
   }
 
+  .playlist-name a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .playlist-name a:hover {
+    color: var(--green);
+  }
+
   .playlist-owner {
     font-size: 0.85rem;
     color: var(--text-secondary);
@@ -444,7 +454,7 @@
     <div class="cover-placeholder" id="coverArt">♫</div>
     <div class="playlist-meta">
       <span class="playlist-type">Playlist</span>
-      <h1 class="playlist-name" id="title">4benies Tracker</h1>
+      <h1 class="playlist-name"><a id="title" href="#">4benies Tracker</a></h1>
       <span class="playlist-owner" id="owner"></span>
     </div>
   </div>
@@ -757,7 +767,11 @@ async function init() {
 
 function switchPlaylist(playlist) {
   currentPlaylist = playlist;
-  document.getElementById('title').textContent = playlist.name;
+  const titleEl = document.getElementById('title');
+  titleEl.textContent = playlist.name;
+  titleEl.href = `https://open.spotify.com/playlist/${playlist.id}`;
+  titleEl.target = '_blank';
+  titleEl.rel = 'noopener';
   currentCoverArt = null;
   currentOwner = null;
 
