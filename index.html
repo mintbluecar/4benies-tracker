@@ -480,6 +480,7 @@ let showDiff = false;
 let lastSnap = null;
 let lastPrevSnap = null;
 let lastRequestedDate = null;
+let lastIsExactSnapshot = false;
 
 async function fetchJSON(url) {
   const res = await fetch(url);
@@ -640,6 +641,7 @@ async function loadSnapshot(snapshotDate, requestedDate) {
     lastSnap = snap;
     lastPrevSnap = prevSnap;
     lastRequestedDate = requestedDate;
+    lastIsExactSnapshot = !requestedDate;
     showDiff = false;
     renderTracks();
   } catch (err) {
@@ -664,7 +666,7 @@ function renderTracks() {
   const prevUrls = prevSnap ? new Set(prevSnap.tracks.map(t => t.spotify_url)) : new Set();
   const added = prevSnap ? new Set([...currentUrls].filter(u => !prevUrls.has(u))) : new Set();
   const removedTracks = prevSnap ? prevSnap.tracks.filter(t => !currentUrls.has(t.spotify_url)) : [];
-  const hasDiff = prevSnap && (added.size > 0 || removedTracks.length > 0);
+  const hasDiff = lastIsExactSnapshot && prevSnap && (added.size > 0 || removedTracks.length > 0);
 
   let barHtml = '<div class="snapshot-bar">';
   barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
