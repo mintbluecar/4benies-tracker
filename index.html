@@ -208,7 +208,7 @@
     background: var(--surface-hover);
   }
 
-  .cal-day.has-snapshot::after {
+  .cal-day.changed::after {
     content: '';
     position: absolute;
     bottom: 3px;
@@ -523,8 +523,10 @@ function updateHeader(snap) {
 
 function renderCalendar() {
   const cal = document.getElementById('calendar');
-  const snapshots = currentPlaylist ? currentPlaylist.snapshots : [];
+  const snapshots = currentPlaylist ? [...currentPlaylist.snapshots].sort() : [];
   const snapshotSet = new Set(snapshots);
+  const firstSnap = snapshots.length > 0 ? snapshots[0] : null;
+  const lastSnap_ = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 
   const monthNames = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
@@ -552,10 +554,12 @@ function renderCalendar() {
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const hasSnap = snapshotSet.has(dateStr);
+    const isSnapshotDate = snapshotSet.has(dateStr);
+    const canRender = firstSnap && dateStr >= firstSnap && dateStr <= lastSnap_;
     const isSelected = dateStr === selectedDate;
     const classes = ['cal-day'];
-    if (hasSnap) classes.push('has-snapshot');
+    if (canRender) classes.push('has-snapshot');
+    if (isSnapshotDate) classes.push('changed');
     if (isSelected) classes.push('selected');
     html += `<div class="${classes.join(' ')}" onclick="selectDate('${dateStr}')">${d}</div>`;
   }
