@@ -779,18 +779,16 @@ function switchPlaylist(playlist) {
   currentOwner = null;
 
   const snapshots = playlist.snapshots.sort();
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  calYear = now.getFullYear();
+  calMonth = now.getMonth();
+
   if (snapshots.length > 0) {
-    const latest = snapshots[snapshots.length - 1];
-    const [y, m] = latest.split('-').map(Number);
-    calYear = y;
-    calMonth = m - 1;
-    selectedDate = latest;
+    selectedDate = today;
     renderCalendar();
-    loadSnapshot(latest, null);
+    selectDate(today);
   } else {
-    const now = new Date();
-    calYear = now.getFullYear();
-    calMonth = now.getMonth();
     selectedDate = null;
     renderCalendar();
     document.getElementById('trackSection').innerHTML =
