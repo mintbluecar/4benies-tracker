@@ -1,0 +1,13 @@
+{
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Permissions-Policy",
+          "value": "autoplay=(self \"https://open.spotify.com\"), encrypted-media=(self \"https://open.spotify.com\"), picture-in-picture=(self \"https://open.spotify.com\"), clipboard-write=(self \"https://open.spotify.com\")"
+        }
+      ]
+    }
+  ]
+}
