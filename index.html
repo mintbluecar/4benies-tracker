@@ -973,9 +973,9 @@ function renderTracks() {
   const showHighlights = showDiff && diff.hasDiff;
 
   // For the update mode, whether the diff target is same-day or previous-day
-  // determines the wording ("since previous update" vs "since previous day").
+  // determines the wording ("since last snapshot" vs "since previous update").
   const targetIsSameDay = diffTarget && diffTarget.snapshot_date === snap.snapshot_date;
-  const sincePhrase = viewMode === 'fullday' || !targetIsSameDay ? 'since previous day' : 'since previous update';
+  const sincePhrase = viewMode === 'fullday' || !targetIsSameDay ? 'since previous update' : 'since last snapshot';
 
   const showChipRow = !requestedDate && dayEntries.length > 0;
 
