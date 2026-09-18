@@ -662,6 +662,7 @@
 <script>
 const BASE = '';
 const SPOTIFY_ICON = '<svg viewBox="0 0 24 24"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>';
+const SINCE_PHRASE = 'since last snapshot';
 let indexData = null;
 let currentPlaylist = null;
 let calYear, calMonth;
@@ -684,11 +685,34 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+// Promise cache: concurrent requests for the same snapshot share one fetch,
+// and a failed fetch is evicted so a retry can succeed. Callers pass an entry
+// (or null); a null entry resolves to null so consumers can Promise.all a
+// mixed array without branching.
+function getSnapshot(entry) {
+  if (!entry) return Promise.resolve(null);
+  const pid = currentPlaylist.id;
+  const key = `${pid}/${entry.file}`;
+  if (!snapshotCache[key]) {
+    snapshotCache[key] = fetchJSON(`${BASE}snapshots/${pid}/${entry.file}`)
+      .catch(err => { delete snapshotCache[key]; throw err; });
+  }
+  return snapshotCache[key];
+}
+
 function formatDuration(ms) {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+// All dates in this app (snapshot filenames, snapshot_date fields, calendar
+// grid) are UTC. Use UTC "today" and UTC month/year so a user in a non-UTC
+// timezone sees the same date the dataset uses — otherwise, near midnight
+// UTC, the selected date can fall outside the visible calendar month.
+function todayUtcDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function formatTimeOfDay(iso) {
@@ -730,19 +754,26 @@ function findLatestSnapshotOnOrBefore(snapshots, targetDate) {
   return best;
 }
 
-// Returns the snapshot immediately preceding the given one, or null.
-function getPreviousSnapshotEntry(snapshots, current) {
-  const sorted = [...snapshots].sort((a, b) => a.time.localeCompare(b.time));
-  const idx = sorted.findIndex(s => s.time === current.time && s.file === current.file);
-  return idx > 0 ? sorted[idx - 1] : null;
+// Returns the newest snapshot strictly earlier than `current` that also
+// satisfies `predicate`, or null. Single pass — no sort needed.
+function findPrevious(snapshots, current, predicate) {
+  let best = null;
+  for (const s of snapshots) {
+    if (s.time >= current.time) continue;
+    if (!predicate(s)) continue;
+    if (!best || s.time > best.time) best = s;
+  }
+  return best;
 }
 
-// Returns the last snapshot on any prior date, or null.
+// Snapshot immediately preceding `current` in time order (any date).
+function getPreviousSnapshotEntry(snapshots, current) {
+  return findPrevious(snapshots, current, () => true);
+}
+
+// Latest snapshot on any date strictly before `current.date`.
 function getPreviousDayLastSnapshot(snapshots, current) {
-  const prior = snapshots.filter(s => s.date < current.date);
-  if (prior.length === 0) return null;
-  prior.sort((a, b) => a.time.localeCompare(b.time));
-  return prior[prior.length - 1];
+  return findPrevious(snapshots, current, s => s.date < current.date);
 }
 
 function updateHeader(snap) {
@@ -752,7 +783,12 @@ function updateHeader(snap) {
 
   if (snap && snap.cover_art) {
     if (currentCoverArt !== snap.cover_art) {
-      coverEl.outerHTML = `<img class="cover-art" id="coverArt" src="${snap.cover_art}" alt="Playlist cover">`;
+      const img = document.createElement('img');
+      img.className = 'cover-art';
+      img.id = 'coverArt';
+      img.alt = 'Playlist cover';
+      img.src = snap.cover_art;
+      coverEl.replaceWith(img);
       currentCoverArt = snap.cover_art;
     }
   } else if (!currentCoverArt) {
@@ -764,7 +800,7 @@ function updateHeader(snap) {
   if (ownerName) {
     const nameHtml = `<strong>${escapeHtml(ownerName)}</strong>`;
     const linked = ownerUrl
-      ? `<a href="${escapeHtml(ownerUrl)}" target="_blank" rel="noopener">${nameHtml}</a>`
+      ? `<a href="${safeUrl(ownerUrl)}" target="_blank" rel="noopener">${nameHtml}</a>`
       : nameHtml;
     ownerEl.innerHTML = `by ${linked}`;
     if (snap && snap.owner) currentOwner = snap.owner;
@@ -812,7 +848,7 @@ function renderCalendar() {
     html += `<div class="cal-day other-month">${daysInPrev - i}</div>`;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayUtcDate();
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const isSnapshotDate = byDate.has(dateStr);
@@ -822,7 +858,8 @@ function renderCalendar() {
     if (canRender) classes.push('has-snapshot');
     if (isSnapshotDate) classes.push('changed');
     if (isSelected) classes.push('selected');
-    html += `<div class="${classes.join(' ')}" onclick="selectDate('${dateStr}')">${d}</div>`;
+    const onclick = canRender ? ` onclick="selectDate('${dateStr}')"` : '';
+    html += `<div class="${classes.join(' ')}"${onclick}>${d}</div>`;
   }
 
   const totalCells = firstDay + daysInMonth;
@@ -850,8 +887,7 @@ async function selectDate(dateStr) {
   const latest = findLatestSnapshotOnOrBefore(currentPlaylist.snapshots, dateStr);
 
   if (!latest) {
-    document.getElementById('trackSection').innerHTML =
-      '<div class="empty-state">No snapshots before this date.</div>';
+    showTracksEmpty('No snapshots before this date.');
     selectedDate = dateStr;
     renderCalendar();
     return;
@@ -867,36 +903,21 @@ async function loadSnapshot(entry, requestedDate) {
   const section = document.getElementById('trackSection');
   section.innerHTML = '<div class="loading">Loading…</div>';
 
-  const pid = currentPlaylist.id;
-  const cacheKey = `${pid}/${entry.file}`;
+  const prevEntry = getPreviousSnapshotEntry(currentPlaylist.snapshots, entry);
+  const prevDayEntry = getPreviousDayLastSnapshot(currentPlaylist.snapshots, entry);
+
+  // Fire all three fetches in parallel; getSnapshot dedups any overlap
+  // (e.g. prevEntry === prevDayEntry on the first snapshot of a day) via
+  // its promise cache, so we never issue duplicate network requests.
+  const snapP = getSnapshot(entry);
+  const prevP = getSnapshot(prevEntry);
+  const prevDayP = getSnapshot(prevDayEntry);
 
   try {
-    if (!snapshotCache[cacheKey]) {
-      snapshotCache[cacheKey] = await fetchJSON(`${BASE}snapshots/${pid}/${entry.file}`);
-    }
-    const snap = snapshotCache[cacheKey];
+    const snap = await snapP;
+    updateHeader(snap);  // paint header as soon as the main snapshot lands
 
-    updateHeader(snap);
-
-    const prevEntry = getPreviousSnapshotEntry(currentPlaylist.snapshots, entry);
-    let prevSnap = null;
-    if (prevEntry) {
-      const prevKey = `${pid}/${prevEntry.file}`;
-      if (!snapshotCache[prevKey]) {
-        snapshotCache[prevKey] = await fetchJSON(`${BASE}snapshots/${pid}/${prevEntry.file}`);
-      }
-      prevSnap = snapshotCache[prevKey];
-    }
-
-    const prevDayEntry = getPreviousDayLastSnapshot(currentPlaylist.snapshots, entry);
-    let prevDaySnap = null;
-    if (prevDayEntry) {
-      const prevDayKey = `${pid}/${prevDayEntry.file}`;
-      if (!snapshotCache[prevDayKey]) {
-        snapshotCache[prevDayKey] = await fetchJSON(`${BASE}snapshots/${pid}/${prevDayEntry.file}`);
-      }
-      prevDaySnap = snapshotCache[prevDayKey];
-    }
+    const [prevSnap, prevDaySnap] = await Promise.all([prevP, prevDayP]);
 
     lastSnap = snap;
     lastEntry = entry;
@@ -908,7 +929,7 @@ async function loadSnapshot(entry, requestedDate) {
     // date and chip selections so the user can move around while comparing.
     renderTracks();
   } catch (err) {
-    section.innerHTML = `<div class="empty-state">Failed to load snapshot: ${err.message}</div>`;
+    showTracksEmpty(`Failed to load snapshot: ${err.message}`);
   }
 }
 
@@ -972,10 +993,6 @@ function renderTracks() {
     : { added: new Set(), removedTracks: [], hasDiff: false };
   const showHighlights = showDiff && diff.hasDiff;
 
-  // For the update mode, whether the diff target is same-day or previous-day
-  // determines the wording ("since last snapshot" vs "since previous update").
-  const targetIsSameDay = diffTarget && diffTarget.snapshot_date === snap.snapshot_date;
-  const sincePhrase = viewMode === 'fullday' || !targetIsSameDay ? 'since previous update' : 'since last snapshot';
 
   const showChipRow = !requestedDate && dayEntries.length > 0;
 
@@ -993,7 +1010,7 @@ function renderTracks() {
 
   let captionHtml = '';
   if (!requestedDate && diffTarget) {
-    const captionText = viewMode === 'fullday' ? 'Changes since previous day' : `Changes ${sincePhrase}`;
+    const captionText = `Changes ${SINCE_PHRASE}`;
     captionHtml = `<div class="diff-caption">${captionText}</div>`;
   }
 
@@ -1005,18 +1022,10 @@ function renderTracks() {
 
   if (requestedDate) {
     barHtml += `<span class="snapshot-meta">last updated on ${snap.snapshot_date}</span>`;
-  } else if (viewMode === 'fullday') {
-    barHtml += `<span class="snapshot-time-meta">last updated at ${timeStr}</span>`;
-    if (diffTarget && diffTarget.snapshot_time) {
-      const elapsed = formatElapsed(diffTarget.snapshot_time, snapTime);
-      barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous day</span>`;
-    }
   } else {
-    barHtml += `<span class="snapshot-time-meta">snapshot generated at ${timeStr}</span>`;
-    if (diffTarget && diffTarget.snapshot_time) {
-      const elapsed = formatElapsed(diffTarget.snapshot_time, snapTime);
-      barHtml += `<span class="snapshot-time-meta">· ${elapsed} ${sincePhrase}</span>`;
-    }
+    const label = viewMode === 'fullday' ? 'last updated at' : 'snapshot generated at';
+    barHtml += `<span class="snapshot-time-meta">${label} ${timeStr}</span>`;
+    barHtml += elapsedSpan(diffTarget && diffTarget.snapshot_time, snapTime);
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
@@ -1035,16 +1044,7 @@ function renderTracks() {
 
   if (showHighlights) {
     diff.removedTracks.forEach(t => {
-      listHtml += `
-        <li class="track removed">
-          <span class="diff-badge removed-badge">−</span>
-          <div class="track-info">
-            <div class="track-name">${escapeHtml(t.name)}</div>
-            <div class="track-artist">${escapeHtml(t.artists.join(', '))}</div>
-          </div>
-          <span class="track-duration">${formatDuration(t.duration_ms)}</span>
-          <a class="track-link" href="${t.spotify_url}" target="_blank" rel="noopener">${SPOTIFY_ICON}</a>
-        </li>`;
+      listHtml += renderTrackLi(t, 'track removed', '<span class="diff-badge removed-badge">−</span>');
     });
   }
 
@@ -1054,8 +1054,26 @@ function renderTracks() {
     const badge = isAdded
       ? '<span class="diff-badge added-badge">+</span>'
       : `<span class="track-num">${i + 1}</span>`;
+    listHtml += renderTrackLi(t, cls, badge);
+  });
 
-    listHtml += `
+  listHtml += '</ul>';
+  section.innerHTML = chipsHtml + captionHtml + barHtml + listHtml;
+}
+
+function showTracksEmpty(message) {
+  document.getElementById('trackSection').innerHTML =
+    `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function elapsedSpan(diffTargetTime, snapTime) {
+  if (!diffTargetTime) return '';
+  const elapsed = formatElapsed(diffTargetTime, snapTime);
+  return `<span class="snapshot-time-meta">· ${elapsed} ${SINCE_PHRASE}</span>`;
+}
+
+function renderTrackLi(t, cls, badge) {
+  return `
       <li class="${cls}">
         ${badge}
         <div class="track-info">
@@ -1063,18 +1081,22 @@ function renderTracks() {
           <div class="track-artist">${escapeHtml(t.artists.join(', '))}</div>
         </div>
         <span class="track-duration">${formatDuration(t.duration_ms)}</span>
-        <a class="track-link" href="${t.spotify_url}" target="_blank" rel="noopener">${SPOTIFY_ICON}</a>
+        <a class="track-link" href="${safeUrl(t.spotify_url)}" target="_blank" rel="noopener">${SPOTIFY_ICON}</a>
       </li>`;
-  });
-
-  listHtml += '</ul>';
-  section.innerHTML = chipsHtml + captionHtml + barHtml + listHtml;
 }
 
 function escapeHtml(str) {
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = String(str ?? '');
   return div.innerHTML;
+}
+
+// Only allow http(s) URLs into href attributes; anything else (javascript:,
+// data:, mailto:, etc.) becomes '#' so a malicious value in playlists.json
+// or a scraped field can't fire on click.
+function safeUrl(url) {
+  const s = String(url ?? '');
+  return /^https?:\/\//i.test(s) ? escapeHtml(s) : '#';
 }
 
 // --- Init ---
@@ -1083,15 +1105,13 @@ async function init() {
   try {
     indexData = await fetchJSON(`${BASE}snapshots/index.json`);
   } catch {
-    document.getElementById('trackSection').innerHTML =
-      '<div class="empty-state">Could not load snapshot index.</div>';
+    showTracksEmpty('Could not load snapshot index.');
     return;
   }
 
   const playlists = indexData.playlists;
   if (playlists.length === 0) {
-    document.getElementById('trackSection').innerHTML =
-      '<div class="empty-state">No playlists tracked yet.</div>';
+    showTracksEmpty('No playlists tracked yet.');
     return;
   }
 
@@ -1119,19 +1139,31 @@ function switchPlaylist(playlist) {
   titleEl.href = `https://open.spotify.com/playlist/${playlist.id}`;
   titleEl.target = '_blank';
   titleEl.rel = 'noopener';
+
+  // Reset all per-playlist state so nothing leaks across a switch.
   currentCoverArt = null;
   currentOwner = null;
+  snapshotCache = {};
+  lastSnap = null;
+  lastEntry = null;
+  lastPrevSnap = null;
+  lastPrevDaySnap = null;
+  lastRequestedDate = null;
+  lastIsExactSnapshot = false;
+  showDiff = false;
+  viewMode = 'fullday';
 
   const embedFrame = document.getElementById('embedFrame');
   const embedSection = document.getElementById('embedSection');
-  embedFrame.src = `https://open.spotify.com/embed/playlist/${playlist.id}?utm_source=generator&theme=0`;
+  const embedSrc = `https://open.spotify.com/embed/playlist/${playlist.id}?utm_source=generator&theme=0`;
+  if (embedFrame.src !== embedSrc) embedFrame.src = embedSrc;
   embedSection.style.display = '';
 
   const snapshots = playlist.snapshots;
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  calYear = now.getFullYear();
-  calMonth = now.getMonth();
+  const today = todayUtcDate();
+  const [y, m] = today.split('-').map(Number);
+  calYear = y;
+  calMonth = m - 1;
 
   if (snapshots.length > 0) {
     selectedDate = today;
@@ -1140,8 +1172,7 @@ function switchPlaylist(playlist) {
   } else {
     selectedDate = null;
     renderCalendar();
-    document.getElementById('trackSection').innerHTML =
-      '<div class="empty-state">No snapshots for this playlist yet.</div>';
+    showTracksEmpty('No snapshots for this playlist yet.');
   }
 }
 
