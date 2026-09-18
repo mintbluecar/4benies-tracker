@@ -268,6 +268,55 @@
     border-radius: 4px;
   }
 
+  .time-chips {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+    padding: 0 0.25rem;
+  }
+
+  .time-chips-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    margin-right: 0.25rem;
+  }
+
+  .time-chip {
+    font-size: 0.7rem;
+    font-family: inherit;
+    font-weight: 500;
+    padding: 0.25rem 0.55rem;
+    border-radius: 5px;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    background: none;
+    color: var(--text-secondary);
+    transition: all 0.15s;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .time-chip:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .time-chip.active {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green-soft);
+  }
+
+  .snapshot-time-meta {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   .diff-summary {
     font-size: 0.75rem;
     color: var(--text-secondary);
@@ -481,6 +530,7 @@ let lastSnap = null;
 let lastPrevSnap = null;
 let lastRequestedDate = null;
 let lastIsExactSnapshot = false;
+let lastEntry = null;
 
 async function fetchJSON(url) {
   const res = await fetch(url);
@@ -493,6 +543,25 @@ function formatDuration(ms) {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+function formatTimeOfDay(iso) {
+  const m = iso.match(/T(\d{2}):(\d{2})/);
+  return m ? `${m[1]}:${m[2]} UTC` : iso;
+}
+
+function formatElapsed(fromIso, toIso) {
+  const from = new Date(fromIso).getTime();
+  const to = new Date(toIso).getTime();
+  let sec = Math.max(0, Math.floor((to - from) / 1000));
+  const d = Math.floor(sec / 86400); sec -= d * 86400;
+  const h = Math.floor(sec / 3600);  sec -= h * 3600;
+  const m = Math.floor(sec / 60);
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h || d) parts.push(`${h}h`);
+  parts.push(`${m}m`);
+  return parts.join(' ');
 }
 
 // Returns Map<dateStr, Array<{date, time, file}>> sorted ascending by time within each day
@@ -652,6 +721,7 @@ async function loadSnapshot(entry, requestedDate) {
     }
 
     lastSnap = snap;
+    lastEntry = entry;
     lastPrevSnap = prevSnap;
     lastRequestedDate = requestedDate;
     lastIsExactSnapshot = !requestedDate;
@@ -665,6 +735,12 @@ async function loadSnapshot(entry, requestedDate) {
 function toggleDiff() {
   showDiff = !showDiff;
   renderTracks();
+}
+
+async function selectSnapshotEntry(file) {
+  const entry = currentPlaylist.snapshots.find(s => s.file === file);
+  if (!entry) return;
+  await loadSnapshot(entry, null);
 }
 
 function renderTracks() {
@@ -681,11 +757,33 @@ function renderTracks() {
   const removedTracks = prevSnap ? prevSnap.tracks.filter(t => !currentUrls.has(t.spotify_url)) : [];
   const hasDiff = lastIsExactSnapshot && prevSnap && (added.size > 0 || removedTracks.length > 0);
 
+  const dayEntries = currentPlaylist.snapshots.filter(s => s.date === snap.snapshot_date)
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  let chipsHtml = '';
+  if (dayEntries.length > 1) {
+    chipsHtml = '<div class="time-chips">';
+    chipsHtml += '<span class="time-chips-label">Updates on this day</span>';
+    for (const e of dayEntries) {
+      const isActive = lastEntry && e.file === lastEntry.file;
+      chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}</button>`;
+    }
+    chipsHtml += '</div>';
+  }
+
   let barHtml = '<div class="snapshot-bar">';
   barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
 
   if (requestedDate) {
     barHtml += `<span class="snapshot-meta">last updated on ${snap.snapshot_date}</span>`;
+  } else {
+    const timeStr = formatTimeOfDay(snap.snapshot_time || snap.snapshot_date + 'T12:00:00Z');
+    barHtml += `<span class="snapshot-time-meta">last updated at ${timeStr}</span>`;
+  }
+
+  if (prevSnap && prevSnap.snapshot_time && snap.snapshot_time && !requestedDate) {
+    const elapsed = formatElapsed(prevSnap.snapshot_time, snap.snapshot_time);
+    barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous update</span>`;
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
@@ -737,7 +835,7 @@ function renderTracks() {
   });
 
   listHtml += '</ul>';
-  section.innerHTML = barHtml + listHtml;
+  section.innerHTML = chipsHtml + barHtml + listHtml;
 }
 
 function escapeHtml(str) {
