@@ -9,6 +9,20 @@ NOW_DATE="$(date -u +%Y-%m-%d)"
 NOW_FILE_TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# --- Fetch playlist description from the public page (embed doesn't expose it) ---
+
+fetch_description() {
+  local playlist_id="$1"
+  local html
+  html=$(curl -sL "https://open.spotify.com/playlist/${playlist_id}" \
+    -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+  echo "$html" \
+    | grep -oE '<meta property="og:description" content="[^"]*"' \
+    | head -1 \
+    | sed -E 's/.*content="([^"]*)".*/\1/' \
+    | sed -e 's/&quot;/"/g' -e "s/&#39;/'/g" -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+}
+
 # --- Fetch tracks from Spotify embed page (no auth needed) ---
 
 fetch_tracks() {
@@ -84,8 +98,9 @@ generate_index() {
     local id
     id=$(basename "$playlist_dir")
 
-    local name=""
+    local name="" owner_url=""
     name=$(jq -r --arg id "$id" '.[] | select(.id == $id) | .name' "$PLAYLISTS_FILE")
+    owner_url=$(jq -r --arg id "$id" '.[] | select(.id == $id) | .owner_url // ""' "$PLAYLISTS_FILE")
     [ -z "$name" ] && name="$id"
 
     # Collect one entry per snapshot file, sorted ascending by filename
@@ -108,8 +123,8 @@ generate_index() {
         '. + [{date: $date, time: $time, file: $file}]')
     done
 
-    index=$(echo "$index" | jq --arg id "$id" --arg name "$name" --argjson entries "$entries" \
-      '. + [{"id": $id, "name": $name, "snapshots": $entries}]')
+    index=$(echo "$index" | jq --arg id "$id" --arg name "$name" --arg owner_url "$owner_url" --argjson entries "$entries" \
+      '. + [{"id": $id, "name": $name, "owner_url": (if $owner_url == "" then null else $owner_url end), "snapshots": $entries}]')
   done
 
   echo "$index" | jq '{"playlists": .}' > "$SNAPSHOTS_DIR/index.json"
@@ -131,8 +146,9 @@ main() {
     local playlist_dir="$SNAPSHOTS_DIR/$id"
     mkdir -p "$playlist_dir"
 
-    local result
+    local result description
     result=$(fetch_tracks "$id")
+    description=$(fetch_description "$id")
     local tracks cover_art owner track_count
     tracks=$(echo "$result" | jq '.tracks')
     cover_art=$(echo "$result" | jq -r '.cover_art // empty')
@@ -150,6 +166,7 @@ main() {
         --argjson tracks "$tracks" \
         --arg cover_art "$cover_art" \
         --arg owner "$owner" \
+        --arg description "$description" \
         '{
           playlist_id: $pid,
           playlist_name: $pname,
@@ -158,6 +175,7 @@ main() {
           track_count: $count,
           cover_art: (if $cover_art == "" then null else $cover_art end),
           owner: (if $owner == "" then null else $owner end),
+          description: (if $description == "" then null else $description end),
           tracks: $tracks
         }' > "$playlist_dir/$NOW_FILE_TS.json"
       any_changed=true
