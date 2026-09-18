@@ -286,6 +286,31 @@
     margin-right: 0.25rem;
   }
 
+  .time-chip-sep {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin: 0 0.05rem;
+    user-select: none;
+  }
+
+  .time-chip.time-chip-agg {
+    background: var(--surface);
+    border-color: var(--border-strong);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .time-chip.time-chip-agg:hover {
+    background: var(--surface-hover);
+  }
+
+  .time-chip.time-chip-agg.active {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green-soft);
+  }
+
   .time-chip {
     font-size: 0.7rem;
     font-family: inherit;
@@ -747,7 +772,8 @@ async function loadSnapshot(entry, requestedDate) {
     lastPrevDaySnap = prevDaySnap;
     lastRequestedDate = requestedDate;
     lastIsExactSnapshot = !requestedDate;
-    showDiff = false;
+    // Deliberately do NOT reset showDiff — the diff toggle persists across
+    // date and chip selections so the user can move around while comparing.
     renderTracks();
   } catch (err) {
     section.innerHTML = `<div class="empty-state">Failed to load snapshot: ${err.message}</div>`;
@@ -818,11 +844,13 @@ function renderTracks() {
   let chipsHtml = '';
   if (showChipRow) {
     chipsHtml = '<div class="time-chips">';
-    chipsHtml += `<button class="time-chip${viewMode === 'fullday' ? ' active' : ''}" onclick="selectFullDay()">${fullDayLabel}</button>`;
-    for (const e of dayEntries) {
+    chipsHtml += `<button class="time-chip time-chip-agg${viewMode === 'fullday' ? ' active' : ''}" onclick="selectFullDay()">${fullDayLabel}</button>`;
+    chipsHtml += '<span class="time-chip-sep">=</span>';
+    dayEntries.forEach((e, idx) => {
+      if (idx > 0) chipsHtml += '<span class="time-chip-sep">+</span>';
       const isActive = viewMode === 'update' && lastEntry && e.file === lastEntry.file;
       chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}</button>`;
-    }
+    });
     chipsHtml += '</div>';
   }
 
