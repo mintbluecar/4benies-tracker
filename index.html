@@ -829,13 +829,20 @@ function renderTracks() {
   const latestOfDayFile = dayEntries.length > 0 ? dayEntries[dayEntries.length - 1].file : null;
 
   // Diff target depends on view mode:
-  //   'fullday' → today's latest vs previous day's latest (day-over-day cumulative)
-  //   'update'  → raw snapshot view (diff not shown in metadata)
-  const diffTarget = viewMode === 'fullday' ? prevDaySnap : null;
-  const diff = (viewMode === 'fullday' && lastIsExactSnapshot)
+  //   'fullday' → today's latest vs previous day's latest (cumulative day-over-day)
+  //   'update'  → current snapshot vs the immediately previous snapshot in the flat list.
+  //              For the first snapshot of a day this equals the previous day's latest;
+  //              for subsequent snapshots it's the previous same-day snapshot.
+  const diffTarget = viewMode === 'fullday' ? prevDaySnap : prevSnap;
+  const diff = (lastIsExactSnapshot && diffTarget)
     ? computeDiff(snap, diffTarget)
     : { added: new Set(), removedTracks: [], hasDiff: false };
   const showHighlights = showDiff && diff.hasDiff;
+
+  // For the update mode, whether the diff target is same-day or previous-day
+  // determines the wording ("since previous update" vs "since previous day").
+  const targetIsSameDay = diffTarget && diffTarget.snapshot_date === snap.snapshot_date;
+  const sincePhrase = viewMode === 'fullday' || !targetIsSameDay ? 'since previous day' : 'since previous update';
 
   const showChipRow = !requestedDate && dayEntries.length > 0;
 
@@ -852,8 +859,9 @@ function renderTracks() {
   }
 
   let captionHtml = '';
-  if (viewMode === 'fullday' && diffTarget && !requestedDate) {
-    captionHtml = '<div class="diff-caption">Changes since previous day</div>';
+  if (!requestedDate && diffTarget) {
+    const captionText = viewMode === 'fullday' ? 'Changes since previous day' : `Changes ${sincePhrase}`;
+    captionHtml = `<div class="diff-caption">${captionText}</div>`;
   }
 
   let barHtml = '<div class="snapshot-bar">';
@@ -872,14 +880,17 @@ function renderTracks() {
       barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous day</span>`;
     }
   } else {
-    // 'update' — clean snapshot view
     const latestSuffix = isLatest ? ' · <span class="chip-latest" style="margin:0">Latest</span>' : '';
     barHtml += `<span class="snapshot-time-meta">snapshot generated at ${timeStr}${latestSuffix}</span>`;
+    if (diffTarget && diffTarget.snapshot_time) {
+      const elapsed = formatElapsed(diffTarget.snapshot_time, snapTime);
+      barHtml += `<span class="snapshot-time-meta">· ${elapsed} ${sincePhrase}</span>`;
+    }
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  if (viewMode === 'fullday' && diff.hasDiff) {
+  if (diff.hasDiff) {
     const parts = [];
     if (diff.added.size > 0) parts.push(`<span class="added-text">+${diff.added.size}</span>`);
     if (diff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${diff.removedTracks.length}</span>`);
