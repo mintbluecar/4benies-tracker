@@ -33,8 +33,12 @@ for playlist_dir in "$SNAPSHOTS_DIR"/*/; do
       continue
     fi
 
-    new_time="${base}T12:00:00Z"
-    new_name="${base}T120000Z.json"
+    # Use midnight UTC of the recorded date — a safe lower bound. Real capture
+    # time for legacy snapshots is unknown; we only know they represent the
+    # state on their snapshot_date. Any new snapshot on the same day will have
+    # a later snapshot_time and sort correctly.
+    new_time="${base}T00:00:00Z"
+    new_name="${base}T000000Z.json"
     new_path="${playlist_dir}${new_name}"
 
     if [ -e "$new_path" ]; then

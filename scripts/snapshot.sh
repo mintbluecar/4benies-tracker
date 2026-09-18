@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SNAPSHOTS_DIR="$ROOT_DIR/snapshots"
 PLAYLISTS_FILE="$ROOT_DIR/playlists.json"
-TODAY="$(date -u +%Y-%m-%d)"
+NOW_DATE="$(date -u +%Y-%m-%d)"
+NOW_FILE_TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # --- Fetch tracks from Spotify embed page (no auth needed) ---
 
@@ -42,8 +44,21 @@ has_changed() {
   local playlist_dir="$1"
   local new_tracks="$2"
 
-  local latest
-  latest=$(ls -1 "$playlist_dir"/*.json 2>/dev/null | grep -v index.json | sort | tail -1 || true)
+  # Pick the snapshot with the greatest snapshot_time (body field is source of
+  # truth; filename can be inaccurate if a snapshot was migrated or clock-skewed).
+  local latest=""
+  local latest_time=""
+  local f
+  for f in "$playlist_dir"/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "index.json" ] && continue
+    local t
+    t=$(jq -r '.snapshot_time // (.snapshot_date + "T12:00:00Z")' "$f" 2>/dev/null || echo "")
+    if [ -z "$latest_time" ] || [[ "$t" > "$latest_time" ]]; then
+      latest_time="$t"
+      latest="$f"
+    fi
+  done
 
   if [ -z "$latest" ]; then
     return 0  # no previous snapshot — treat as changed
@@ -73,11 +88,28 @@ generate_index() {
     name=$(jq -r --arg id "$id" '.[] | select(.id == $id) | .name' "$PLAYLISTS_FILE")
     [ -z "$name" ] && name="$id"
 
-    local dates="[]"
-    dates=$(ls -1 "$playlist_dir"*.json 2>/dev/null | grep -v index.json | xargs -I{} basename {} .json | jq -R . | jq -s 'sort')
+    # Collect one entry per snapshot file, sorted ascending by filename
+    # (filenames are lexically sortable because YYYY-MM-DDTHHMMSSZ is ISO-like)
+    local entries="[]"
+    for f in $(ls -1 "$playlist_dir"*.json 2>/dev/null | grep -v index.json | sort); do
+      local file_base
+      file_base=$(basename "$f")
+      # Prefer snapshot_time from the file body; fall back to date-only for safety
+      local snap_time snap_date
+      snap_time=$(jq -r '.snapshot_time // empty' "$f")
+      snap_date=$(jq -r '.snapshot_date // empty' "$f")
+      if [ -z "$snap_time" ]; then
+        snap_time="${snap_date}T12:00:00Z"
+      fi
+      entries=$(echo "$entries" | jq \
+        --arg date "$snap_date" \
+        --arg time "$snap_time" \
+        --arg file "$file_base" \
+        '. + [{date: $date, time: $time, file: $file}]')
+    done
 
-    index=$(echo "$index" | jq --arg id "$id" --arg name "$name" --argjson dates "$dates" \
-      '. + [{"id": $id, "name": $name, "snapshots": $dates}]')
+    index=$(echo "$index" | jq --arg id "$id" --arg name "$name" --argjson entries "$entries" \
+      '. + [{"id": $id, "name": $name, "snapshots": $entries}]')
   done
 
   echo "$index" | jq '{"playlists": .}' > "$SNAPSHOTS_DIR/index.json"
@@ -112,7 +144,8 @@ main() {
       jq -n \
         --arg pid "$id" \
         --arg pname "$name" \
-        --arg date "$TODAY" \
+        --arg date "$NOW_DATE" \
+        --arg time "$NOW_ISO" \
         --argjson count "$track_count" \
         --argjson tracks "$tracks" \
         --arg cover_art "$cover_art" \
@@ -121,11 +154,12 @@ main() {
           playlist_id: $pid,
           playlist_name: $pname,
           snapshot_date: $date,
+          snapshot_time: $time,
           track_count: $count,
           cover_art: (if $cover_art == "" then null else $cover_art end),
           owner: (if $owner == "" then null else $owner end),
           tracks: $tracks
-        }' > "$playlist_dir/$TODAY.json"
+        }' > "$playlist_dir/$NOW_FILE_TS.json"
       any_changed=true
     else
       echo "  No changes detected. Skipping."
