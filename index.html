@@ -763,6 +763,24 @@ async function selectSnapshotEntry(file) {
   await loadSnapshot(entry, null);
 }
 
+async function toggleFullDayDiff() {
+  if (!lastEntry) return;
+  // Full-day diff always shows the LATEST snapshot of the day vs prev day's
+  // last snapshot. Navigate to latest if not there, then flip the mode.
+  const dayEntries = currentPlaylist.snapshots
+    .filter(s => s.date === lastEntry.date)
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const latestOfDay = dayEntries[dayEntries.length - 1];
+
+  if (latestOfDay.file !== lastEntry.file) {
+    await loadSnapshot(latestOfDay, null);
+    diffMode = 'day';
+  } else {
+    diffMode = diffMode === 'day' ? 'off' : 'day';
+  }
+  renderTracks();
+}
+
 function computeDiff(snap, baseSnap) {
   if (!baseSnap) return { added: new Set(), removedTracks: [], hasDiff: false };
   const currentUrls = new Set(snap.tracks.map(t => t.spotify_url));
@@ -782,12 +800,11 @@ function renderTracks() {
   const section = document.getElementById('trackSection');
 
   const updateDiff = lastIsExactSnapshot ? computeDiff(snap, prevSnap) : { added: new Set(), removedTracks: [], hasDiff: false };
-  const isSameAsUpdate = prevSnap && prevDaySnap && prevSnap.snapshot_time === prevDaySnap.snapshot_time;
-  const dayDiff = (lastIsExactSnapshot && prevDaySnap && !isSameAsUpdate)
+  const dayDiff = (lastIsExactSnapshot && prevDaySnap)
     ? computeDiff(snap, prevDaySnap)
     : { added: new Set(), removedTracks: [], hasDiff: false };
 
-  // Pick the diff to visualize based on active mode
+  // Which diff to visualize based on active mode
   const activeDiff = diffMode === 'update' ? updateDiff : diffMode === 'day' ? dayDiff : null;
   const shownAdded = activeDiff ? activeDiff.added : new Set();
   const shownRemoved = activeDiff ? activeDiff.removedTracks : [];
@@ -795,13 +812,21 @@ function renderTracks() {
   const dayEntries = currentPlaylist.snapshots.filter(s => s.date === snap.snapshot_date)
     .sort((a, b) => a.time.localeCompare(b.time));
 
+  // "Full day" chip appears only when there are multiple intraday snapshots
+  // AND a previous day exists — otherwise the regular diff button already
+  // covers the day-over-day comparison.
+  const showFullDayChip = dayEntries.length > 1 && !!prevDaySnap;
+
   let chipsHtml = '';
   if (dayEntries.length > 1) {
     chipsHtml = '<div class="time-chips">';
     chipsHtml += '<span class="time-chips-label">Updates on this day</span>';
     for (const e of dayEntries) {
-      const isActive = lastEntry && e.file === lastEntry.file;
+      const isActive = lastEntry && e.file === lastEntry.file && diffMode !== 'day';
       chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}</button>`;
+    }
+    if (showFullDayChip) {
+      chipsHtml += `<button class="time-chip${diffMode === 'day' ? ' active' : ''}" onclick="toggleFullDayDiff()">Full day diff</button>`;
     }
     chipsHtml += '</div>';
   }
@@ -823,18 +848,20 @@ function renderTracks() {
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  const diffSummary = (d) => {
+  // Single diff summary + toggle — based on the currently active mode. When
+  // no mode is active, show update-diff counts (or day-diff for single-snapshot
+  // days where the two are equivalent).
+  const summaryDiff = diffMode === 'day' ? dayDiff : updateDiff;
+  const hasAnyDiff = summaryDiff.hasDiff;
+  if (hasAnyDiff) {
     const parts = [];
-    if (d.added.size > 0) parts.push(`<span class="added-text">+${d.added.size}</span>`);
-    if (d.removedTracks.length > 0) parts.push(`<span class="removed-text">−${d.removedTracks.length}</span>`);
-    return parts.join(' ');
-  };
-
-  if (updateDiff.hasDiff) {
-    barHtml += `<button class="diff-toggle${diffMode === 'update' ? ' active' : ''}" onclick="setDiffMode('update')">since update ${diffSummary(updateDiff)}</button>`;
-  }
-  if (dayDiff.hasDiff) {
-    barHtml += `<button class="diff-toggle${diffMode === 'day' ? ' active' : ''}" onclick="setDiffMode('day')">since prev day ${diffSummary(dayDiff)}</button>`;
+    if (summaryDiff.added.size > 0) parts.push(`<span class="added-text">+${summaryDiff.added.size}</span>`);
+    if (summaryDiff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${summaryDiff.removedTracks.length}</span>`);
+    barHtml += `<span class="diff-summary">${parts.join(' ')}</span>`;
+    // The button toggles the update-diff. Day-diff is toggled via the chip.
+    if (updateDiff.hasDiff) {
+      barHtml += `<button class="diff-toggle${diffMode === 'update' ? ' active' : ''}" onclick="setDiffMode('update')">diff</button>`;
+    }
   }
 
   barHtml += '</div>';
