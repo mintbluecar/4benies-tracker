@@ -525,7 +525,8 @@ let selectedDate = null;
 let snapshotCache = {};
 let currentCoverArt = null;
 let currentOwner = null;
-let diffMode = 'off';  // 'off' | 'update' | 'day'
+let showDiff = false;
+let viewMode = 'update';  // 'update' (a specific time chip) | 'fullday' (Today chip)
 let lastSnap = null;
 let lastPrevSnap = null;
 let lastPrevDaySnap = null;
@@ -700,6 +701,7 @@ async function selectDate(dateStr) {
   }
 
   selectedDate = dateStr;
+  viewMode = 'update';
   renderCalendar();
   await loadSnapshot(latest, dateStr !== latest.date ? dateStr : null);
 }
@@ -745,40 +747,38 @@ async function loadSnapshot(entry, requestedDate) {
     lastPrevDaySnap = prevDaySnap;
     lastRequestedDate = requestedDate;
     lastIsExactSnapshot = !requestedDate;
-    diffMode = 'off';
+    showDiff = false;
     renderTracks();
   } catch (err) {
     section.innerHTML = `<div class="empty-state">Failed to load snapshot: ${err.message}</div>`;
   }
 }
 
-function setDiffMode(mode) {
-  diffMode = (diffMode === mode) ? 'off' : mode;
+function toggleDiff() {
+  showDiff = !showDiff;
   renderTracks();
 }
 
 async function selectSnapshotEntry(file) {
   const entry = currentPlaylist.snapshots.find(s => s.file === file);
   if (!entry) return;
+  viewMode = 'update';
   await loadSnapshot(entry, null);
 }
 
-async function toggleFullDayDiff() {
+async function selectFullDay() {
   if (!lastEntry) return;
-  // Full-day diff always shows the LATEST snapshot of the day vs prev day's
-  // last snapshot. Navigate to latest if not there, then flip the mode.
   const dayEntries = currentPlaylist.snapshots
     .filter(s => s.date === lastEntry.date)
     .sort((a, b) => a.time.localeCompare(b.time));
   const latestOfDay = dayEntries[dayEntries.length - 1];
 
+  viewMode = 'fullday';
   if (latestOfDay.file !== lastEntry.file) {
     await loadSnapshot(latestOfDay, null);
-    diffMode = 'day';
   } else {
-    diffMode = diffMode === 'day' ? 'off' : 'day';
+    renderTracks();
   }
-  renderTracks();
 }
 
 function computeDiff(snap, baseSnap) {
@@ -799,34 +799,29 @@ function renderTracks() {
 
   const section = document.getElementById('trackSection');
 
-  const updateDiff = lastIsExactSnapshot ? computeDiff(snap, prevSnap) : { added: new Set(), removedTracks: [], hasDiff: false };
-  const dayDiff = (lastIsExactSnapshot && prevDaySnap)
-    ? computeDiff(snap, prevDaySnap)
-    : { added: new Set(), removedTracks: [], hasDiff: false };
-
-  // Which diff to visualize based on active mode
-  const activeDiff = diffMode === 'update' ? updateDiff : diffMode === 'day' ? dayDiff : null;
-  const shownAdded = activeDiff ? activeDiff.added : new Set();
-  const shownRemoved = activeDiff ? activeDiff.removedTracks : [];
-
   const dayEntries = currentPlaylist.snapshots.filter(s => s.date === snap.snapshot_date)
     .sort((a, b) => a.time.localeCompare(b.time));
 
-  // "Full day" chip appears only when there are multiple intraday snapshots
-  // AND a previous day exists — otherwise the regular diff button already
-  // covers the day-over-day comparison.
-  const showFullDayChip = dayEntries.length > 1 && !!prevDaySnap;
+  // Diff target depends on view mode:
+  //   'fullday' → today's latest vs previous day's latest
+  //   'update'  → this snapshot vs the immediately previous snapshot in the flat list
+  // For single-snapshot days those two are equivalent (prevSnap === prevDaySnap).
+  const diffTarget = viewMode === 'fullday' ? prevDaySnap : prevSnap;
+  const diff = lastIsExactSnapshot ? computeDiff(snap, diffTarget) : { added: new Set(), removedTracks: [], hasDiff: false };
+  const showHighlights = showDiff && diff.hasDiff;
+
+  // "Today" / date chip appears only when there are multiple intraday snapshots.
+  const showChipRow = dayEntries.length > 1;
+  const today = new Date().toISOString().slice(0, 10);
+  const fullDayLabel = snap.snapshot_date === today ? 'Today' : 'Full day';
 
   let chipsHtml = '';
-  if (dayEntries.length > 1) {
+  if (showChipRow) {
     chipsHtml = '<div class="time-chips">';
-    chipsHtml += '<span class="time-chips-label">Updates on this day</span>';
+    chipsHtml += `<button class="time-chip${viewMode === 'fullday' ? ' active' : ''}" onclick="selectFullDay()">${fullDayLabel}</button>`;
     for (const e of dayEntries) {
-      const isActive = lastEntry && e.file === lastEntry.file && diffMode !== 'day';
+      const isActive = viewMode === 'update' && lastEntry && e.file === lastEntry.file;
       chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}</button>`;
-    }
-    if (showFullDayChip) {
-      chipsHtml += `<button class="time-chip${diffMode === 'day' ? ' active' : ''}" onclick="toggleFullDayDiff()">Full day diff</button>`;
     }
     chipsHtml += '</div>';
   }
@@ -841,35 +836,29 @@ function renderTracks() {
     barHtml += `<span class="snapshot-time-meta">last updated at ${timeStr}</span>`;
   }
 
-  if (prevSnap && prevSnap.snapshot_time && snap.snapshot_time && !requestedDate) {
-    const elapsed = formatElapsed(prevSnap.snapshot_time, snap.snapshot_time);
-    barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous update</span>`;
+  // Elapsed since the current diff target (previous update or previous day)
+  if (diffTarget && diffTarget.snapshot_time && snap.snapshot_time && !requestedDate) {
+    const elapsed = formatElapsed(diffTarget.snapshot_time, snap.snapshot_time);
+    const label = viewMode === 'fullday' ? 'since previous day' : 'since previous update';
+    barHtml += `<span class="snapshot-time-meta">· ${elapsed} ${label}</span>`;
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  // Single diff summary + toggle — based on the currently active mode. When
-  // no mode is active, show update-diff counts (or day-diff for single-snapshot
-  // days where the two are equivalent).
-  const summaryDiff = diffMode === 'day' ? dayDiff : updateDiff;
-  const hasAnyDiff = summaryDiff.hasDiff;
-  if (hasAnyDiff) {
+  if (diff.hasDiff) {
     const parts = [];
-    if (summaryDiff.added.size > 0) parts.push(`<span class="added-text">+${summaryDiff.added.size}</span>`);
-    if (summaryDiff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${summaryDiff.removedTracks.length}</span>`);
+    if (diff.added.size > 0) parts.push(`<span class="added-text">+${diff.added.size}</span>`);
+    if (diff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${diff.removedTracks.length}</span>`);
     barHtml += `<span class="diff-summary">${parts.join(' ')}</span>`;
-    // The button toggles the update-diff. Day-diff is toggled via the chip.
-    if (updateDiff.hasDiff) {
-      barHtml += `<button class="diff-toggle${diffMode === 'update' ? ' active' : ''}" onclick="setDiffMode('update')">diff</button>`;
-    }
+    barHtml += `<button class="diff-toggle${showDiff ? ' active' : ''}" onclick="toggleDiff()">diff</button>`;
   }
 
   barHtml += '</div>';
 
   let listHtml = '<ul class="track-list">';
 
-  if (activeDiff) {
-    shownRemoved.forEach(t => {
+  if (showHighlights) {
+    diff.removedTracks.forEach(t => {
       listHtml += `
         <li class="track removed">
           <span class="diff-badge removed-badge">−</span>
@@ -884,7 +873,7 @@ function renderTracks() {
   }
 
   snap.tracks.forEach((t, i) => {
-    const isAdded = activeDiff && shownAdded.has(t.spotify_url);
+    const isAdded = showHighlights && diff.added.has(t.spotify_url);
     const cls = isAdded ? 'track added' : 'track';
     const badge = isAdded
       ? '<span class="diff-badge added-badge">+</span>'
