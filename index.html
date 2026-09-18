@@ -122,6 +122,24 @@
     font-weight: 500;
   }
 
+  .playlist-description {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-top: 0.15rem;
+  }
+
+  .playlist-owner a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  .playlist-owner a:hover {
+    border-bottom-color: var(--text-secondary);
+  }
+
   /* Playlist selector */
   .playlist-select {
     width: 100%;
@@ -487,6 +505,27 @@
     flex-shrink: 0;
   }
 
+  .site-footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .site-footer a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+
+  .site-footer a:hover {
+    border-bottom-color: var(--text-secondary);
+  }
+
   .embed-section {
     margin-bottom: 1.75rem;
   }
@@ -507,6 +546,51 @@
     border: 0;
     border-radius: var(--radius-sm);
     display: block;
+  }
+
+  /* Wide viewports: playlist header spans the full width; calendar and
+     embed sit side-by-side below it. Embed is placed in col 2 across the
+     rows occupied by calendar+trackSection so its 500px height fits
+     inside the natural height of those rows without stretching either. */
+  @media (min-width: 960px) {
+    .container {
+      display: grid;
+      grid-template-columns: 640px minmax(320px, 400px);
+      column-gap: 2.5rem;
+      max-width: 1080px;
+      align-items: start;
+    }
+    .playlist-header {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+    .playlist-select {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .calendar {
+      grid-column: 1;
+      grid-row: 3;
+    }
+    #trackSection {
+      grid-column: 1;
+      grid-row: 4;
+    }
+    .embed-section {
+      grid-column: 2;
+      grid-row: 3 / span 2;
+      align-self: start;
+      position: sticky;
+      top: 2rem;
+      margin-bottom: 0;
+    }
+    .embed-section .embed-frame {
+      height: 500px;
+    }
+    .site-footer {
+      grid-column: 1 / -1;
+      grid-row: 5;
+    }
   }
 
   .diff-badge.added-badge {
@@ -550,6 +634,7 @@
     <div class="playlist-meta">
       <span class="playlist-type">Playlist</span>
       <h1 class="playlist-name"><a id="title" href="#">4benies Tracker</a></h1>
+      <span class="playlist-description" id="description" style="display: none;"></span>
       <span class="playlist-owner" id="owner"></span>
     </div>
   </div>
@@ -567,6 +652,11 @@
   </div>
 
   <div id="trackSection"></div>
+
+  <footer class="site-footer">
+    a record of bonnie's gift to us, made with love by twitter user
+    <a href="https://x.com/mintbluetoyota" target="_blank" rel="noopener">@mintbluetoyota</a>.
+  </footer>
 </div>
 
 <script>
@@ -658,6 +748,7 @@ function getPreviousDayLastSnapshot(snapshots, current) {
 function updateHeader(snap) {
   const coverEl = document.getElementById('coverArt');
   const ownerEl = document.getElementById('owner');
+  const descEl = document.getElementById('description');
 
   if (snap && snap.cover_art) {
     if (currentCoverArt !== snap.cover_art) {
@@ -668,11 +759,23 @@ function updateHeader(snap) {
     coverEl.outerHTML = '<div class="cover-placeholder" id="coverArt">♫</div>';
   }
 
-  if (snap && snap.owner) {
-    ownerEl.innerHTML = `by <strong>${escapeHtml(snap.owner)}</strong>`;
-    currentOwner = snap.owner;
-  } else if (currentOwner) {
-    ownerEl.innerHTML = `by <strong>${escapeHtml(currentOwner)}</strong>`;
+  const ownerName = (snap && snap.owner) || currentOwner;
+  const ownerUrl = currentPlaylist && currentPlaylist.owner_url;
+  if (ownerName) {
+    const nameHtml = `<strong>${escapeHtml(ownerName)}</strong>`;
+    const linked = ownerUrl
+      ? `<a href="${escapeHtml(ownerUrl)}" target="_blank" rel="noopener">${nameHtml}</a>`
+      : nameHtml;
+    ownerEl.innerHTML = `by ${linked}`;
+    if (snap && snap.owner) currentOwner = snap.owner;
+  }
+
+  if (snap && snap.description) {
+    descEl.textContent = snap.description;
+    descEl.style.display = '';
+  } else {
+    descEl.textContent = '';
+    descEl.style.display = 'none';
   }
 }
 
