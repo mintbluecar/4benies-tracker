@@ -495,17 +495,30 @@ function formatDuration(ms) {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-function findNearestSnapshot(dates, target) {
+// Returns Map<dateStr, Array<{date, time, file}>> sorted ascending by time within each day
+function groupSnapshotsByDate(snapshots) {
+  const byDate = new Map();
+  for (const s of snapshots) {
+    if (!byDate.has(s.date)) byDate.set(s.date, []);
+    byDate.get(s.date).push(s);
+  }
+  for (const arr of byDate.values()) arr.sort((a, b) => a.time.localeCompare(b.time));
+  return byDate;
+}
+
+// Returns the latest snapshot on-or-before targetDate, or null.
+function findLatestSnapshotOnOrBefore(snapshots, targetDate) {
   let best = null;
-  for (const d of dates) {
-    if (d <= target && (!best || d > best)) best = d;
+  for (const s of snapshots) {
+    if (s.date <= targetDate && (!best || s.time > best.time)) best = s;
   }
   return best;
 }
 
-function getPreviousSnapshot(dates, current) {
-  const sorted = [...dates].sort();
-  const idx = sorted.indexOf(current);
+// Returns the snapshot immediately preceding the given one, or null.
+function getPreviousSnapshotEntry(snapshots, current) {
+  const sorted = [...snapshots].sort((a, b) => a.time.localeCompare(b.time));
+  const idx = sorted.findIndex(s => s.time === current.time && s.file === current.file);
   return idx > 0 ? sorted[idx - 1] : null;
 }
 
@@ -534,10 +547,10 @@ function updateHeader(snap) {
 
 function renderCalendar() {
   const cal = document.getElementById('calendar');
-  const snapshots = currentPlaylist ? [...currentPlaylist.snapshots].sort() : [];
-  const snapshotSet = new Set(snapshots);
-  const firstSnap = snapshots.length > 0 ? snapshots[0] : null;
-  const lastSnap_ = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const snapshots = currentPlaylist ? currentPlaylist.snapshots : [];
+  const byDate = groupSnapshotsByDate(snapshots);
+  const sortedDates = [...byDate.keys()].sort();
+  const firstDate = sortedDates.length > 0 ? sortedDates[0] : null;
 
   const monthNames = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
@@ -563,11 +576,11 @@ function renderCalendar() {
     html += `<div class="cal-day other-month">${daysInPrev - i}</div>`;
   }
 
+  const today = new Date().toISOString().slice(0, 10);
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const isSnapshotDate = snapshotSet.has(dateStr);
-    const today = new Date().toISOString().slice(0, 10);
-    const canRender = firstSnap && dateStr >= firstSnap && dateStr <= today;
+    const isSnapshotDate = byDate.has(dateStr);
+    const canRender = firstDate && dateStr >= firstDate && dateStr <= today;
     const isSelected = dateStr === selectedDate;
     const classes = ['cal-day'];
     if (canRender) classes.push('has-snapshot');
@@ -598,9 +611,9 @@ function changeMonth(delta) {
 async function selectDate(dateStr) {
   if (!currentPlaylist) return;
 
-  const nearest = findNearestSnapshot(currentPlaylist.snapshots, dateStr);
+  const latest = findLatestSnapshotOnOrBefore(currentPlaylist.snapshots, dateStr);
 
-  if (!nearest) {
+  if (!latest) {
     document.getElementById('trackSection').innerHTML =
       '<div class="empty-state">No snapshots before this date.</div>';
     selectedDate = dateStr;
@@ -610,30 +623,30 @@ async function selectDate(dateStr) {
 
   selectedDate = dateStr;
   renderCalendar();
-  await loadSnapshot(nearest, dateStr !== nearest ? dateStr : null);
+  await loadSnapshot(latest, dateStr !== latest.date ? dateStr : null);
 }
 
-async function loadSnapshot(snapshotDate, requestedDate) {
+async function loadSnapshot(entry, requestedDate) {
   const section = document.getElementById('trackSection');
   section.innerHTML = '<div class="loading">Loading…</div>';
 
   const pid = currentPlaylist.id;
-  const cacheKey = `${pid}/${snapshotDate}`;
+  const cacheKey = `${pid}/${entry.file}`;
 
   try {
     if (!snapshotCache[cacheKey]) {
-      snapshotCache[cacheKey] = await fetchJSON(`${BASE}snapshots/${pid}/${snapshotDate}.json`);
+      snapshotCache[cacheKey] = await fetchJSON(`${BASE}snapshots/${pid}/${entry.file}`);
     }
     const snap = snapshotCache[cacheKey];
 
     updateHeader(snap);
 
-    const prevDate = getPreviousSnapshot(currentPlaylist.snapshots, snapshotDate);
+    const prevEntry = getPreviousSnapshotEntry(currentPlaylist.snapshots, entry);
     let prevSnap = null;
-    if (prevDate) {
-      const prevKey = `${pid}/${prevDate}`;
+    if (prevEntry) {
+      const prevKey = `${pid}/${prevEntry.file}`;
       if (!snapshotCache[prevKey]) {
-        snapshotCache[prevKey] = await fetchJSON(`${BASE}snapshots/${pid}/${prevDate}.json`);
+        snapshotCache[prevKey] = await fetchJSON(`${BASE}snapshots/${pid}/${prevEntry.file}`);
       }
       prevSnap = snapshotCache[prevKey];
     }
@@ -778,7 +791,7 @@ function switchPlaylist(playlist) {
   currentCoverArt = null;
   currentOwner = null;
 
-  const snapshots = playlist.snapshots.sort();
+  const snapshots = playlist.snapshots;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   calYear = now.getFullYear();
