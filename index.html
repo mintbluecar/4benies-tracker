@@ -525,9 +525,10 @@ let selectedDate = null;
 let snapshotCache = {};
 let currentCoverArt = null;
 let currentOwner = null;
-let showDiff = false;
+let diffMode = 'off';  // 'off' | 'update' | 'day'
 let lastSnap = null;
 let lastPrevSnap = null;
+let lastPrevDaySnap = null;
 let lastRequestedDate = null;
 let lastIsExactSnapshot = false;
 let lastEntry = null;
@@ -589,6 +590,14 @@ function getPreviousSnapshotEntry(snapshots, current) {
   const sorted = [...snapshots].sort((a, b) => a.time.localeCompare(b.time));
   const idx = sorted.findIndex(s => s.time === current.time && s.file === current.file);
   return idx > 0 ? sorted[idx - 1] : null;
+}
+
+// Returns the last snapshot on any prior date, or null.
+function getPreviousDayLastSnapshot(snapshots, current) {
+  const prior = snapshots.filter(s => s.date < current.date);
+  if (prior.length === 0) return null;
+  prior.sort((a, b) => a.time.localeCompare(b.time));
+  return prior[prior.length - 1];
 }
 
 function updateHeader(snap) {
@@ -720,20 +729,31 @@ async function loadSnapshot(entry, requestedDate) {
       prevSnap = snapshotCache[prevKey];
     }
 
+    const prevDayEntry = getPreviousDayLastSnapshot(currentPlaylist.snapshots, entry);
+    let prevDaySnap = null;
+    if (prevDayEntry) {
+      const prevDayKey = `${pid}/${prevDayEntry.file}`;
+      if (!snapshotCache[prevDayKey]) {
+        snapshotCache[prevDayKey] = await fetchJSON(`${BASE}snapshots/${pid}/${prevDayEntry.file}`);
+      }
+      prevDaySnap = snapshotCache[prevDayKey];
+    }
+
     lastSnap = snap;
     lastEntry = entry;
     lastPrevSnap = prevSnap;
+    lastPrevDaySnap = prevDaySnap;
     lastRequestedDate = requestedDate;
     lastIsExactSnapshot = !requestedDate;
-    showDiff = false;
+    diffMode = 'off';
     renderTracks();
   } catch (err) {
     section.innerHTML = `<div class="empty-state">Failed to load snapshot: ${err.message}</div>`;
   }
 }
 
-function toggleDiff() {
-  showDiff = !showDiff;
+function setDiffMode(mode) {
+  diffMode = (diffMode === mode) ? 'off' : mode;
   renderTracks();
 }
 
@@ -743,19 +763,34 @@ async function selectSnapshotEntry(file) {
   await loadSnapshot(entry, null);
 }
 
+function computeDiff(snap, baseSnap) {
+  if (!baseSnap) return { added: new Set(), removedTracks: [], hasDiff: false };
+  const currentUrls = new Set(snap.tracks.map(t => t.spotify_url));
+  const baseUrls = new Set(baseSnap.tracks.map(t => t.spotify_url));
+  const added = new Set([...currentUrls].filter(u => !baseUrls.has(u)));
+  const removedTracks = baseSnap.tracks.filter(t => !currentUrls.has(t.spotify_url));
+  return { added, removedTracks, hasDiff: added.size > 0 || removedTracks.length > 0 };
+}
+
 function renderTracks() {
   const snap = lastSnap;
   const prevSnap = lastPrevSnap;
+  const prevDaySnap = lastPrevDaySnap;
   const requestedDate = lastRequestedDate;
   if (!snap) return;
 
   const section = document.getElementById('trackSection');
 
-  const currentUrls = new Set(snap.tracks.map(t => t.spotify_url));
-  const prevUrls = prevSnap ? new Set(prevSnap.tracks.map(t => t.spotify_url)) : new Set();
-  const added = prevSnap ? new Set([...currentUrls].filter(u => !prevUrls.has(u))) : new Set();
-  const removedTracks = prevSnap ? prevSnap.tracks.filter(t => !currentUrls.has(t.spotify_url)) : [];
-  const hasDiff = lastIsExactSnapshot && prevSnap && (added.size > 0 || removedTracks.length > 0);
+  const updateDiff = lastIsExactSnapshot ? computeDiff(snap, prevSnap) : { added: new Set(), removedTracks: [], hasDiff: false };
+  const isSameAsUpdate = prevSnap && prevDaySnap && prevSnap.snapshot_time === prevDaySnap.snapshot_time;
+  const dayDiff = (lastIsExactSnapshot && prevDaySnap && !isSameAsUpdate)
+    ? computeDiff(snap, prevDaySnap)
+    : { added: new Set(), removedTracks: [], hasDiff: false };
+
+  // Pick the diff to visualize based on active mode
+  const activeDiff = diffMode === 'update' ? updateDiff : diffMode === 'day' ? dayDiff : null;
+  const shownAdded = activeDiff ? activeDiff.added : new Set();
+  const shownRemoved = activeDiff ? activeDiff.removedTracks : [];
 
   const dayEntries = currentPlaylist.snapshots.filter(s => s.date === snap.snapshot_date)
     .sort((a, b) => a.time.localeCompare(b.time));
@@ -788,20 +823,26 @@ function renderTracks() {
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  if (hasDiff) {
+  const diffSummary = (d) => {
     const parts = [];
-    if (added.size > 0) parts.push(`<span class="added-text">+${added.size}</span>`);
-    if (removedTracks.length > 0) parts.push(`<span class="removed-text">−${removedTracks.length}</span>`);
-    barHtml += `<span class="diff-summary">${parts.join(' ')}</span>`;
-    barHtml += `<button class="diff-toggle${showDiff ? ' active' : ''}" onclick="toggleDiff()">diff</button>`;
+    if (d.added.size > 0) parts.push(`<span class="added-text">+${d.added.size}</span>`);
+    if (d.removedTracks.length > 0) parts.push(`<span class="removed-text">−${d.removedTracks.length}</span>`);
+    return parts.join(' ');
+  };
+
+  if (updateDiff.hasDiff) {
+    barHtml += `<button class="diff-toggle${diffMode === 'update' ? ' active' : ''}" onclick="setDiffMode('update')">since update ${diffSummary(updateDiff)}</button>`;
+  }
+  if (dayDiff.hasDiff) {
+    barHtml += `<button class="diff-toggle${diffMode === 'day' ? ' active' : ''}" onclick="setDiffMode('day')">since prev day ${diffSummary(dayDiff)}</button>`;
   }
 
   barHtml += '</div>';
 
   let listHtml = '<ul class="track-list">';
 
-  if (showDiff && hasDiff) {
-    removedTracks.forEach(t => {
+  if (activeDiff) {
+    shownRemoved.forEach(t => {
       listHtml += `
         <li class="track removed">
           <span class="diff-badge removed-badge">−</span>
@@ -816,7 +857,7 @@ function renderTracks() {
   }
 
   snap.tracks.forEach((t, i) => {
-    const isAdded = showDiff && hasDiff && added.has(t.spotify_url);
+    const isAdded = activeDiff && shownAdded.has(t.spotify_url);
     const cls = isAdded ? 'track added' : 'track';
     const badge = isAdded
       ? '<span class="diff-badge added-badge">+</span>'
