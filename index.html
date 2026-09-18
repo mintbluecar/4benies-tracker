@@ -286,29 +286,28 @@
     margin-right: 0.25rem;
   }
 
-  .time-chip-sep {
-    font-size: 0.85rem;
+  .chip-latest {
+    font-size: 0.55rem;
     color: var(--text-muted);
-    font-weight: 500;
-    margin: 0 0.05rem;
-    user-select: none;
-  }
-
-  .time-chip.time-chip-agg {
-    background: var(--surface);
-    border-color: var(--border-strong);
-    color: var(--text);
+    margin-left: 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     font-weight: 600;
   }
 
-  .time-chip.time-chip-agg:hover {
-    background: var(--surface-hover);
+  .time-chip.active .chip-latest {
+    color: var(--green-soft);
+    opacity: 0.7;
   }
 
-  .time-chip.time-chip-agg.active {
-    background: var(--green-dim);
-    border-color: var(--green);
-    color: var(--green-soft);
+  .diff-caption {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    padding: 0 0.25rem;
+    margin-bottom: 0.3rem;
   }
 
   .time-chip {
@@ -551,7 +550,7 @@ let snapshotCache = {};
 let currentCoverArt = null;
 let currentOwner = null;
 let showDiff = false;
-let viewMode = 'update';  // 'update' (a specific time chip) | 'fullday' (Today chip)
+let viewMode = 'fullday';  // 'fullday' (All changes) | 'update' (a specific time chip)
 let lastSnap = null;
 let lastPrevSnap = null;
 let lastPrevDaySnap = null;
@@ -726,7 +725,7 @@ async function selectDate(dateStr) {
   }
 
   selectedDate = dateStr;
-  viewMode = 'update';
+  viewMode = 'fullday';
   renderCalendar();
   await loadSnapshot(latest, dateStr !== latest.date ? dateStr : null);
 }
@@ -827,53 +826,60 @@ function renderTracks() {
 
   const dayEntries = currentPlaylist.snapshots.filter(s => s.date === snap.snapshot_date)
     .sort((a, b) => a.time.localeCompare(b.time));
+  const latestOfDayFile = dayEntries.length > 0 ? dayEntries[dayEntries.length - 1].file : null;
 
   // Diff target depends on view mode:
-  //   'fullday' → today's latest vs previous day's latest
-  //   'update'  → this snapshot vs the immediately previous snapshot in the flat list
-  // For single-snapshot days those two are equivalent (prevSnap === prevDaySnap).
-  const diffTarget = viewMode === 'fullday' ? prevDaySnap : prevSnap;
-  const diff = lastIsExactSnapshot ? computeDiff(snap, diffTarget) : { added: new Set(), removedTracks: [], hasDiff: false };
+  //   'fullday' → today's latest vs previous day's latest (day-over-day cumulative)
+  //   'update'  → raw snapshot view (diff not shown in metadata)
+  const diffTarget = viewMode === 'fullday' ? prevDaySnap : null;
+  const diff = (viewMode === 'fullday' && lastIsExactSnapshot)
+    ? computeDiff(snap, diffTarget)
+    : { added: new Set(), removedTracks: [], hasDiff: false };
   const showHighlights = showDiff && diff.hasDiff;
 
-  // "Today" / date chip appears only when there are multiple intraday snapshots.
-  const showChipRow = dayEntries.length > 1;
-  const today = new Date().toISOString().slice(0, 10);
-  const fullDayLabel = snap.snapshot_date === today ? 'Today' : 'Full day';
+  const showChipRow = !requestedDate && dayEntries.length > 0;
 
   let chipsHtml = '';
   if (showChipRow) {
     chipsHtml = '<div class="time-chips">';
-    chipsHtml += `<button class="time-chip time-chip-agg${viewMode === 'fullday' ? ' active' : ''}" onclick="selectFullDay()">${fullDayLabel}</button>`;
-    chipsHtml += '<span class="time-chip-sep">=</span>';
-    dayEntries.forEach((e, idx) => {
-      if (idx > 0) chipsHtml += '<span class="time-chip-sep">+</span>';
+    chipsHtml += `<button class="time-chip${viewMode === 'fullday' ? ' active' : ''}" onclick="selectFullDay()">All changes</button>`;
+    dayEntries.forEach((e) => {
       const isActive = viewMode === 'update' && lastEntry && e.file === lastEntry.file;
-      chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}</button>`;
+      const latestBadge = e.file === latestOfDayFile ? '<span class="chip-latest">Latest</span>' : '';
+      chipsHtml += `<button class="time-chip${isActive ? ' active' : ''}" onclick="selectSnapshotEntry('${e.file}')">${formatTimeOfDay(e.time)}${latestBadge}</button>`;
     });
     chipsHtml += '</div>';
+  }
+
+  let captionHtml = '';
+  if (viewMode === 'fullday' && diffTarget && !requestedDate) {
+    captionHtml = '<div class="diff-caption">Changes since previous day</div>';
   }
 
   let barHtml = '<div class="snapshot-bar">';
   barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
 
+  const snapTime = snap.snapshot_time || snap.snapshot_date + 'T12:00:00Z';
+  const timeStr = formatTimeOfDay(snapTime);
+  const isLatest = lastEntry && lastEntry.file === latestOfDayFile;
+
   if (requestedDate) {
     barHtml += `<span class="snapshot-meta">last updated on ${snap.snapshot_date}</span>`;
-  } else {
-    const timeStr = formatTimeOfDay(snap.snapshot_time || snap.snapshot_date + 'T12:00:00Z');
+  } else if (viewMode === 'fullday') {
     barHtml += `<span class="snapshot-time-meta">last updated at ${timeStr}</span>`;
-  }
-
-  // Elapsed since the current diff target (previous update or previous day)
-  if (diffTarget && diffTarget.snapshot_time && snap.snapshot_time && !requestedDate) {
-    const elapsed = formatElapsed(diffTarget.snapshot_time, snap.snapshot_time);
-    const label = viewMode === 'fullday' ? 'since previous day' : 'since previous update';
-    barHtml += `<span class="snapshot-time-meta">· ${elapsed} ${label}</span>`;
+    if (diffTarget && diffTarget.snapshot_time) {
+      const elapsed = formatElapsed(diffTarget.snapshot_time, snapTime);
+      barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous day</span>`;
+    }
+  } else {
+    // 'update' — clean snapshot view
+    const latestSuffix = isLatest ? ' · <span class="chip-latest" style="margin:0">Latest</span>' : '';
+    barHtml += `<span class="snapshot-time-meta">snapshot generated at ${timeStr}${latestSuffix}</span>`;
   }
 
   barHtml += `<span class="snapshot-meta">${snap.track_count} tracks</span>`;
 
-  if (diff.hasDiff) {
+  if (viewMode === 'fullday' && diff.hasDiff) {
     const parts = [];
     if (diff.added.size > 0) parts.push(`<span class="added-text">+${diff.added.size}</span>`);
     if (diff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${diff.removedTracks.length}</span>`);
@@ -920,7 +926,7 @@ function renderTracks() {
   });
 
   listHtml += '</ul>';
-  section.innerHTML = chipsHtml + barHtml + listHtml;
+  section.innerHTML = chipsHtml + captionHtml + barHtml + listHtml;
 }
 
 function escapeHtml(str) {
