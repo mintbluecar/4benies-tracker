@@ -16,16 +16,21 @@ Edit `playlists.json`:
 
 ```json
 [
-  { "id": "1FvNFiqtjKeUTMvE0eIFNf", "name": "4benies" },
-  { "id": "ANOTHER_PLAYLIST_ID", "name": "another playlist" }
+  {
+    "id": "1FvNFiqtjKeUTMvE0eIFNf",
+    "owner_url": "https://open.spotify.com/user/USERNAME"
+  }
 ]
 ```
 
-The playlist ID is the string after `/playlist/` in a Spotify URL.
+- `id` — the string after `/playlist/` in a Spotify URL.
+- `owner_url` — optional. If set, the owner name in the header links to this URL.
+
+The playlist's display name is scraped from Spotify (`.title`) at snapshot time, so no need to duplicate it in config.
 
 ## Snapshot Format
 
-Snapshots are stored in `snapshots/<playlist-id>/YYYY-MM-DD.json`. A new file is only written when the track list differs from the previous snapshot.
+Snapshots are stored in `snapshots/<playlist-id>/YYYY-MM-DDTHHMMSSZ.json` (UTC timestamp). A new file is only written when the track list differs from the most recent snapshot for that playlist.
 
 Each snapshot contains:
 
@@ -34,9 +39,11 @@ Each snapshot contains:
   "playlist_id": "...",
   "playlist_name": "...",
   "snapshot_date": "2026-08-26",
+  "snapshot_time": "2026-08-26T12:00:00Z",
   "track_count": 3,
   "cover_art": "https://image-cdn-fa.spotifycdn.com/image/...",
   "owner": "username",
+  "description": "playlist description or null",
   "tracks": [
     {
       "name": "Song Title",
