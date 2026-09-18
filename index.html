@@ -869,7 +869,6 @@ function renderTracks() {
 
   const snapTime = snap.snapshot_time || snap.snapshot_date + 'T12:00:00Z';
   const timeStr = formatTimeOfDay(snapTime);
-  const isLatest = lastEntry && lastEntry.file === latestOfDayFile;
 
   if (requestedDate) {
     barHtml += `<span class="snapshot-meta">last updated on ${snap.snapshot_date}</span>`;
@@ -880,8 +879,7 @@ function renderTracks() {
       barHtml += `<span class="snapshot-time-meta">· ${elapsed} since previous day</span>`;
     }
   } else {
-    const latestSuffix = isLatest ? ' · <span class="chip-latest" style="margin:0">Latest</span>' : '';
-    barHtml += `<span class="snapshot-time-meta">snapshot generated at ${timeStr}${latestSuffix}</span>`;
+    barHtml += `<span class="snapshot-time-meta">snapshot generated at ${timeStr}</span>`;
     if (diffTarget && diffTarget.snapshot_time) {
       const elapsed = formatElapsed(diffTarget.snapshot_time, snapTime);
       barHtml += `<span class="snapshot-time-meta">· ${elapsed} ${sincePhrase}</span>`;
