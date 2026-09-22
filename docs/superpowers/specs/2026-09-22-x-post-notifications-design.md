@@ -48,6 +48,31 @@ X API v2 as of 2026 is pay-per-use for new developers:
 
 ## Design
 
+### Opt-in per playlist
+
+X posting is per-playlist opt-in, not global. `playlists.json` gains a
+new optional boolean field `x_post` (default `false` when absent).
+Only playlists with `"x_post": true` fanout to X on a detected change.
+The rest continue to snapshot silently as they do today.
+
+Updated `playlists.json` schema (backwards compatible — existing
+entries without the field keep working, they just don't post):
+
+```json
+[
+  {
+    "id": "1FvNFiqtjKeUTMvE0eIFNf",
+    "owner_url": "https://open.spotify.com/user/...",
+    "x_post": true
+  }
+]
+```
+
+Rationale: the tracker may grow to cover playlists that are private
+research or personal listening; only the flagship account(s) should
+post publicly. Opt-in (default off) is safer than opt-out — adding a
+new playlist never accidentally starts posting.
+
 ### Trigger point
 
 Inside `scripts/snapshot.sh`, in the branch entered when
@@ -57,8 +82,16 @@ scope: `scraped_name`, the new snapshot JSON on disk, and the path to
 the previous snapshot (obtainable via `latest_snapshot_file` called
 before the write).
 
-Insertion is a single call:
-`post_change_to_x "$prev_snapshot_file" "$new_snapshot_file"`.
+The `x_post` flag for the current playlist is read from
+`playlists.json` at the top of the per-playlist loop (alongside `id`)
+into a local `x_post_enabled` variable. The trigger becomes:
+
+```
+if [ "$x_post_enabled" = "true" ]; then
+  post_change_to_x "$prev_snapshot_file" "$new_snapshot_file"
+fi
+```
+
 The function is fully responsible for: computing the diff, formatting
 the post, and calling the X API. Errors are caught inside the
 function; the caller does not branch on its exit status.
@@ -173,6 +206,7 @@ No new step, no new job. If a repo variable `X_DRY_RUN` is set to
 
 | Failure | Behavior |
 |---|---|
+| `x_post: false` (or absent) for this playlist | Skip post; no log. |
 | Credentials env vars unset | Skip post; log; exit 0. Local dev safe. |
 | `X_DRY_RUN=1` | Print `[DRY RUN] <text>`; exit 0. |
 | Reorder-only diff | Skip post; log; exit 0. |
@@ -201,6 +235,11 @@ credentials are set.
    `format_post` is not called in this case; `post_change_to_x`
    returns early. Assert the log line.
 
+3. **Opt-in gating**: run `snapshot.sh` with a fixture
+   `playlists.json` where one playlist has `x_post: true` and another
+   has it absent. With `X_DRY_RUN=1`, assert only the opted-in
+   playlist prints `[DRY RUN]`.
+
 Test runner is a new `scripts/test.sh` invoked manually and from a new
 "Tests" CI workflow that runs on push to a branch. Not required to
 pass before land — this is a personal tracker, not production — but
@@ -221,8 +260,10 @@ Not code, but the plan cannot ship without these:
 ## Files touched
 
 - `scripts/snapshot.sh` — new functions (`compute_diff`,
-  `format_post`, `post_to_x`, `post_change_to_x`); one call site
-  inside the "Changes detected" branch.
+  `format_post`, `post_to_x`, `post_change_to_x`); read `x_post` per
+  playlist; conditional call site inside the "Changes detected" branch.
+- `playlists.json` — add `"x_post": true` to the flagship entry
+  (`1FvNFiqtjKeUTMvE0eIFNf`).
 - `.github/workflows/snapshot.yml` — 4 env vars on the snapshot step.
 - `tests/fixtures/*.json`, `tests/fixtures/expected.txt` — new.
 - `scripts/test.sh` — new.
