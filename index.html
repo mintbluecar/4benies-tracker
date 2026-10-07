@@ -933,14 +933,19 @@ function getSortedSnapshotDates() {
 }
 
 
-function navigateDay(delta) {
-  if (!lastEntry) return;
+// Nearest day with a change strictly before (delta < 0) or after the selected
+// date. Relative to the selected date, not the snapshot on screen: on a quiet
+// day the page shows an older snapshot, and that snapshot's day is the
+// previous change.
+function adjacentChangeDate(delta) {
   const dates = getSortedSnapshotDates();
-  const idx = dates.indexOf(lastEntry.date);
-  if (idx === -1) return;
-  const targetIdx = idx + delta;
-  if (targetIdx < 0 || targetIdx >= dates.length) return;
-  const target = dates[targetIdx];
+  if (delta < 0) return dates.filter(d => d < selectedDate).pop() || null;
+  return dates.find(d => d > selectedDate) || null;
+}
+
+function navigateDay(delta) {
+  const target = adjacentChangeDate(delta);
+  if (!target) return;
   const [y, m] = target.split('-').map(Number);
   if (y !== calYear || m - 1 !== calMonth) { calYear = y; calMonth = m - 1; }
   selectDate(target);
@@ -948,10 +953,8 @@ function navigateDay(delta) {
 
 function renderDayNavHtml() {
   if (!lastEntry) return '';
-  const dates = getSortedSnapshotDates();
-  const idx = dates.indexOf(lastEntry.date);
-  const hasPrev = idx > 0;
-  const hasNext = idx < dates.length - 1;
+  const hasPrev = !!adjacentChangeDate(-1);
+  const hasNext = !!adjacentChangeDate(1);
   const onToday = selectedDate === todayUtcDate();
   return `<div class="day-nav">
     <button onclick="navigateDay(-1)"${hasPrev ? '' : ' disabled'}><span class="day-nav-arrow" aria-hidden="true">&#8249;</span>Jump to previous change</button>
