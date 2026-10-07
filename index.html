@@ -127,7 +127,26 @@
     color: var(--text-secondary);
     line-height: 1.4;
     margin-top: 0.15rem;
+    max-height: 6em;
+    overflow: hidden;
+    transition: opacity 0.3s ease, max-height 0.3s ease, margin-top 0.3s ease;
   }
+
+  /* Negative margin cancels the parent's 0.3rem flex gap while collapsed. */
+  .playlist-description.is-hidden {
+    opacity: 0;
+    max-height: 0;
+    margin-top: -0.3rem;
+  }
+
+  .fade-swap { transition: opacity 0.15s ease; }
+  .fade-swap.is-fading { opacity: 0; }
+
+  @keyframes cover-in {
+    from { opacity: 0; transform: scale(0.97); }
+  }
+
+  .cover-art.cover-swap { animation: cover-in 0.35s ease-out; }
 
   .playlist-owner a {
     color: inherit;
@@ -199,6 +218,17 @@
     font-size: 0.9rem;
     letter-spacing: -0.01em;
   }
+
+  @keyframes cal-in-next {
+    from { opacity: 0; transform: translateX(16px); }
+  }
+
+  @keyframes cal-in-prev {
+    from { opacity: 0; transform: translateX(-16px); }
+  }
+
+  .slide-next { animation: cal-in-next 0.28s ease-out; }
+  .slide-prev { animation: cal-in-prev 0.28s ease-out; }
 
   .cal-grid {
     display: grid;
@@ -366,6 +396,7 @@
 
   .diff-summary .added-text { color: var(--green-soft); }
   .diff-summary .removed-text { color: var(--red); }
+  .diff-summary .moved-text { color: var(--text); }
 
   .diff-toggle {
     margin-left: auto;
@@ -393,6 +424,51 @@
     color: var(--green-soft);
   }
 
+  /* Day nav */
+  .day-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .day-nav button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+
+  .day-nav-arrow {
+    font-size: 1rem;
+    line-height: 0;
+    position: relative;
+    top: -1px;
+  }
+
+  .day-nav button:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--green);
+    color: var(--text);
+  }
+
+  .day-nav button:disabled {
+    opacity: 0.15;
+    cursor: default;
+  }
+
   /* Track list */
   .track-list {
     list-style: none;
@@ -412,6 +488,50 @@
   }
 
   .track:last-child { border-bottom: none; }
+
+  /* max-height can't interpolate to "none", so 80px stands in for a row's
+     full height; rows are single-line and well under it. */
+  @keyframes track-enter {
+    from {
+      opacity: 0;
+      max-height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-bottom-width: 0;
+    }
+    60% { opacity: 0; }
+    to { opacity: 1; max-height: 80px; }
+  }
+
+  @keyframes track-leave {
+    from { opacity: 1; max-height: 80px; }
+    40% { opacity: 0; }
+    to {
+      opacity: 0;
+      max-height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-bottom-width: 0;
+    }
+  }
+
+  .track.enter {
+    overflow: hidden;
+    animation: track-enter 0.36s ease-out backwards;
+    animation-delay: calc(var(--i, 0) * 35ms);
+  }
+
+  .track.leave {
+    overflow: hidden;
+    animation: track-leave 0.22s ease-in forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .track.enter, .track.leave,
+    .slide-next, .slide-prev,
+    .cover-art.cover-swap { animation: none; }
+    .playlist-description, .fade-swap { transition: none; }
+  }
 
   .track:hover {
     background: var(--surface-hover);
@@ -598,6 +718,15 @@
     color: var(--green-soft);
   }
 
+  .diff-badge.moved-badge {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-secondary);
+  }
+
+  .track.moved {
+    background: rgba(255,255,255,0.04);
+  }
+
   .diff-badge.removed-badge {
     background: var(--red-dim);
     color: var(--red);
@@ -634,7 +763,7 @@
     <div class="playlist-meta">
       <span class="playlist-type">Playlist</span>
       <h1 class="playlist-name"><a id="title" href="#">4benies Tracker</a></h1>
-      <span class="playlist-description" id="description" style="display: none;"></span>
+      <span class="playlist-description is-hidden" id="description"></span>
       <span class="playlist-owner" id="owner"></span>
     </div>
   </div>
@@ -678,6 +807,14 @@ let lastPrevDaySnap = null;
 let lastRequestedDate = null;
 let lastIsExactSnapshot = false;
 let lastEntry = null;
+let renderedUrls = null;
+let lastRenderedFile = null;
+let renderToken = 0;
+let loadToken = 0;
+let loadingTimer = null;
+let lastCalMonthKey = null;
+const LEAVE_MS = 220;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 async function fetchJSON(url) {
   const res = await fetch(url);
@@ -776,15 +913,70 @@ function getPreviousDayLastSnapshot(snapshots, current) {
   return findPrevious(snapshots, current, s => s.date < current.date);
 }
 
+function getSortedSnapshotDates() {
+  if (!currentPlaylist) return [];
+  return [...new Set(currentPlaylist.snapshots.map(s => s.date))].sort();
+}
+
+
+function navigateDay(delta) {
+  if (!lastEntry) return;
+  const dates = getSortedSnapshotDates();
+  const idx = dates.indexOf(lastEntry.date);
+  if (idx === -1) return;
+  const targetIdx = idx + delta;
+  if (targetIdx < 0 || targetIdx >= dates.length) return;
+  const target = dates[targetIdx];
+  const [y, m] = target.split('-').map(Number);
+  if (y !== calYear || m - 1 !== calMonth) { calYear = y; calMonth = m - 1; }
+  selectDate(target);
+}
+
+function renderDayNavHtml() {
+  if (!lastEntry) return '';
+  const dates = getSortedSnapshotDates();
+  const idx = dates.indexOf(lastEntry.date);
+  const hasPrev = idx > 0;
+  const hasNext = idx < dates.length - 1;
+  const onToday = selectedDate === todayUtcDate();
+  return `<div class="day-nav">
+    <button onclick="navigateDay(-1)"${hasPrev ? '' : ' disabled'}><span class="day-nav-arrow">&#8249;</span>Jump to previous change</button>
+    <button onclick="goToToday()"${onToday ? ' disabled' : ''}>Today</button>
+    <button onclick="navigateDay(1)"${hasNext ? '' : ' disabled'}>Jump to next change<span class="day-nav-arrow">&#8250;</span></button>
+  </div>`;
+}
+
+function goToToday() {
+  const today = todayUtcDate();
+  const [y, m] = today.split('-').map(Number);
+  calYear = y;
+  calMonth = m - 1;
+  selectDate(today);
+}
+
+// Mirrors normalize_cover_id in scripts/snapshot.sh so CDN host/size changes
+// for the same image don't count as a new cover.
+function coverId(url) {
+  if (!url) return null;
+  const id = url.replace(/.*\/image\//, '');
+  return /^[a-f0-9]+$/.test(id) ? id.slice(-24) : id;
+}
+
 function updateHeader(snap) {
   const coverEl = document.getElementById('coverArt');
   const ownerEl = document.getElementById('owner');
   const descEl = document.getElementById('description');
 
+  const titleEl = document.getElementById('title');
+  const name = (snap && snap.playlist_name) || (currentPlaylist && currentPlaylist.name);
+  if (name && titleEl.textContent !== name) {
+    swapContent(titleEl, () => { titleEl.textContent = name; });
+  }
+
   if (snap && snap.cover_art) {
-    if (currentCoverArt !== snap.cover_art) {
+    if (coverId(currentCoverArt) !== coverId(snap.cover_art)) {
       const img = document.createElement('img');
-      img.className = 'cover-art';
+      img.className = 'cover-art cover-swap';
       img.id = 'coverArt';
       img.alt = 'Playlist cover';
       img.src = snap.cover_art;
@@ -802,17 +994,45 @@ function updateHeader(snap) {
     const linked = ownerUrl
       ? `<a href="${safeUrl(ownerUrl)}" target="_blank" rel="noopener">${nameHtml}</a>`
       : nameHtml;
-    ownerEl.innerHTML = `by ${linked}`;
+    const html = `by ${linked}`;
+    if (!ownerEl.dataset.html) ownerEl.innerHTML = html;
+    else if (ownerEl.dataset.html !== html) swapContent(ownerEl, () => { ownerEl.innerHTML = html; });
+    ownerEl.dataset.html = html;
     if (snap && snap.owner) currentOwner = snap.owner;
   }
 
-  if (snap && snap.description) {
-    descEl.textContent = snap.description;
-    descEl.style.display = '';
-  } else {
-    descEl.textContent = '';
-    descEl.style.display = 'none';
+  // Text is kept while collapsing so it fades out instead of vanishing.
+  const desc = (snap && snap.description) || '';
+  if (!desc) {
+    descEl.classList.add('is-hidden');
+  } else if (descEl.classList.contains('is-hidden')) {
+    descEl.textContent = desc;
+    descEl.classList.remove('is-hidden');
+  } else if (descEl.textContent !== desc) {
+    swapContent(descEl, () => { descEl.textContent = desc; });
   }
+}
+
+// Fade an element out, change it, and fade it back in.
+function swapContent(el, apply) {
+  if (reducedMotion.matches) { apply(); return; }
+  el.classList.add('fade-swap', 'is-fading');
+  setTimeout(() => { apply(); el.classList.remove('is-fading'); }, 150);
+}
+
+// Ease an element from oldH to whatever height its new content needs.
+function animateHeight(el, oldH) {
+  el.style.transition = '';
+  el.style.height = '';
+  const newH = el.offsetHeight;
+  if (!oldH || oldH === newH || reducedMotion.matches) return;
+  el.style.height = oldH + 'px';
+  el.offsetHeight;  // force layout so the transition starts from oldH
+  el.style.transition = 'height 0.28s ease';
+  el.style.height = newH + 'px';
+  setTimeout(() => {
+    if (el.style.height === newH + 'px') { el.style.height = ''; el.style.transition = ''; }
+  }, 320);
 }
 
 // --- Calendar ---
@@ -869,7 +1089,18 @@ function renderCalendar() {
   }
 
   html += '</div>';
+
+  const monthKey = calYear * 12 + calMonth;
+  const dir = lastCalMonthKey === null ? 0 : Math.sign(monthKey - lastCalMonthKey);
+  lastCalMonthKey = monthKey;
+  const oldH = cal.offsetHeight;
   cal.innerHTML = html;
+  if (dir) {
+    const cls = dir > 0 ? 'slide-next' : 'slide-prev';
+    cal.querySelector('.cal-grid').classList.add(cls);
+    cal.querySelector('.month-label').classList.add(cls);
+    animateHeight(cal, oldH);
+  }
 }
 
 function changeMonth(delta) {
@@ -899,9 +1130,37 @@ async function selectDate(dateStr) {
   await loadSnapshot(latest, dateStr !== latest.date ? dateStr : null);
 }
 
+// Keep the track section tall enough that the current scroll position stays
+// valid when the list gets shorter; otherwise the browser clamps scrollY and
+// the page jumps. The reserve is released gradually as the user scrolls up.
+function heightNeededForScroll(section) {
+  const other = document.documentElement.scrollHeight - section.offsetHeight;
+  return Math.ceil(scrollY + innerHeight - other);
+}
+
+function reserveScrollPosition(section) {
+  const need = heightNeededForScroll(section);
+  section.style.minHeight = need > 0 ? need + 'px' : '';
+}
+
+window.addEventListener('scroll', () => {
+  const section = document.getElementById('trackSection');
+  if (!section.style.minHeight) return;
+  const need = heightNeededForScroll(section);
+  if (need <= 0) section.style.minHeight = '';
+  else if (need < parseFloat(section.style.minHeight)) section.style.minHeight = need + 'px';
+}, { passive: true });
+
 async function loadSnapshot(entry, requestedDate) {
   const section = document.getElementById('trackSection');
-  section.innerHTML = '<div class="loading">Loading…</div>';
+  const token = ++loadToken;
+  reserveScrollPosition(section);
+  // Keep the old list on screen for fast loads so rows that persist don't blink.
+  clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => {
+    section.innerHTML = '<div class="loading">Loading…</div>';
+    renderedUrls = null;
+  }, 250);
 
   const prevEntry = getPreviousSnapshotEntry(currentPlaylist.snapshots, entry);
   const prevDayEntry = getPreviousDayLastSnapshot(currentPlaylist.snapshots, entry);
@@ -913,11 +1172,14 @@ async function loadSnapshot(entry, requestedDate) {
   const prevP = getSnapshot(prevEntry);
   const prevDayP = getSnapshot(prevDayEntry);
 
+  // A newer selection may finish first; a stale load must not touch the page.
   try {
     const snap = await snapP;
+    if (token !== loadToken) return;
     updateHeader(snap);  // paint header as soon as the main snapshot lands
 
     const [prevSnap, prevDaySnap] = await Promise.all([prevP, prevDayP]);
+    if (token !== loadToken) return;
 
     lastSnap = snap;
     lastEntry = entry;
@@ -927,8 +1189,11 @@ async function loadSnapshot(entry, requestedDate) {
     lastIsExactSnapshot = !requestedDate;
     // Deliberately do NOT reset showDiff — the diff toggle persists across
     // date and chip selections so the user can move around while comparing.
+    clearTimeout(loadingTimer);
     renderTracks();
   } catch (err) {
+    if (token !== loadToken) return;
+    clearTimeout(loadingTimer);
     showTracksEmpty(`Failed to load snapshot: ${err.message}`);
   }
 }
@@ -961,15 +1226,40 @@ async function selectFullDay() {
 }
 
 function computeDiff(snap, baseSnap) {
-  if (!baseSnap) return { added: new Set(), removedTracks: [], hasDiff: false };
+  if (!baseSnap) return { added: new Set(), removedTracks: [], moved: new Set(), hasDiff: false };
   const currentUrls = new Set(snap.tracks.map(t => t.spotify_url));
   const baseUrls = new Set(baseSnap.tracks.map(t => t.spotify_url));
   const added = new Set([...currentUrls].filter(u => !baseUrls.has(u)));
   const removedTracks = baseSnap.tracks.filter(t => !currentUrls.has(t.spotify_url));
-  return { added, removedTracks, hasDiff: added.size > 0 || removedTracks.length > 0 };
+  const moved = findMovedTracks(baseSnap.tracks, snap.tracks);
+  return {
+    added, removedTracks, moved,
+    hasDiff: added.size > 0 || removedTracks.length > 0 || moved.size > 0,
+  };
 }
 
-function renderTracks() {
+// Smallest set of tracks whose moves explain the new order: everything kept
+// in the longest run that's still in the old relative order counts as unmoved.
+function findMovedTracks(baseTracks, tracks) {
+  const baseIndex = new Map();
+  baseTracks.forEach((t, i) => { if (!baseIndex.has(t.spotify_url)) baseIndex.set(t.spotify_url, i); });
+  const common = tracks.map(t => t.spotify_url).filter(u => baseIndex.has(u));
+  const seq = common.map(u => baseIndex.get(u));
+
+  const tails = [], tailIdx = [], prev = [];
+  seq.forEach((v, i) => {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < v) lo = mid + 1; else hi = mid; }
+    prev[i] = lo > 0 ? tailIdx[lo - 1] : -1;
+    tails[lo] = v;
+    tailIdx[lo] = i;
+  });
+  const keep = new Set();
+  for (let k = tails.length ? tailIdx[tails.length - 1] : -1; k >= 0; k = prev[k]) keep.add(k);
+  return new Set(common.filter((_, i) => !keep.has(i)));
+}
+
+async function renderTracks() {
   const snap = lastSnap;
   const prevSnap = lastPrevSnap;
   const prevDaySnap = lastPrevDaySnap;
@@ -1015,7 +1305,6 @@ function renderTracks() {
   }
 
   let barHtml = '<div class="snapshot-bar">';
-  barHtml += `<span class="snapshot-date-label">${snap.snapshot_date}</span>`;
 
   const snapTime = snap.snapshot_time || snap.snapshot_date + 'T12:00:00Z';
   const timeStr = formatTimeOfDay(snapTime);
@@ -1034,34 +1323,106 @@ function renderTracks() {
     const parts = [];
     if (diff.added.size > 0) parts.push(`<span class="added-text">+${diff.added.size}</span>`);
     if (diff.removedTracks.length > 0) parts.push(`<span class="removed-text">−${diff.removedTracks.length}</span>`);
+    if (diff.moved.size > 0) parts.push(`<span class="moved-text">${diff.moved.size} moved</span>`);
     barHtml += `<span class="diff-summary">${parts.join(' ')}</span>`;
     barHtml += `<button class="diff-toggle${showDiff ? ' active' : ''}" onclick="toggleDiff()">diff</button>`;
   }
 
   barHtml += '</div>';
 
+  // On a snapshot change (not a diff toggle), rows leaving collapse out first,
+  // then rows not previously on screen expand in.
+  const prevUrls = lastRenderedFile !== lastEntry.file ? renderedUrls : null;
+  const nextUrls = new Set();
+  let enterCount = 0;
+  const enterAttrs = (t) => {
+    nextUrls.add(t.spotify_url);
+    if (!prevUrls || prevUrls.has(t.spotify_url)) return { cls: '', style: '' };
+    return { cls: ' enter', style: ` style="--i:${Math.min(enterCount++, 12)}"` };
+  };
+
   let listHtml = '<ul class="track-list">';
 
   if (showHighlights) {
     diff.removedTracks.forEach(t => {
-      listHtml += renderTrackLi(t, 'track removed', '<span class="diff-badge removed-badge">−</span>');
+      const a = enterAttrs(t);
+      listHtml += renderTrackLi(t, 'track removed' + a.cls, '<span class="diff-badge removed-badge">−</span>', a.style);
     });
   }
 
   snap.tracks.forEach((t, i) => {
     const isAdded = showHighlights && diff.added.has(t.spotify_url);
-    const cls = isAdded ? 'track added' : 'track';
+    const isMoved = showHighlights && diff.moved.has(t.spotify_url);
+    const a = enterAttrs(t);
+    const cls = (isAdded ? 'track added' : isMoved ? 'track moved' : 'track') + a.cls;
     const badge = isAdded
       ? '<span class="diff-badge added-badge">+</span>'
-      : `<span class="track-num">${i + 1}</span>`;
-    listHtml += renderTrackLi(t, cls, badge);
+      : isMoved
+        ? '<span class="diff-badge moved-badge" title="Moved">↕</span>'
+        : `<span class="track-num">${i + 1}</span>`;
+    listHtml += renderTrackLi(t, cls, badge, a.style);
   });
 
   listHtml += '</ul>';
-  section.innerHTML = chipsHtml + captionHtml + barHtml + listHtml;
+  const dayNavHtml = renderDayNavHtml();
+  const renderedFile = lastEntry.file;
+
+  const token = ++renderToken;
+  if (prevUrls && !reducedMotion.matches) {
+    const leaving = [...section.querySelectorAll('.track[data-url]')]
+      .filter(li => !nextUrls.has(li.dataset.url));
+    if (leaving.length) {
+      leaving.forEach(li => li.classList.add('leave'));
+      await new Promise(r => setTimeout(r, LEAVE_MS));
+      if (token !== renderToken) return;
+    }
+  }
+
+  // FLIP: record where surviving rows sit now, swap the DOM, then slide each
+  // row from its old spot to its new one (this is what makes reorders visible).
+  const oldTops = new Map();
+  if (prevUrls && !reducedMotion.matches) {
+    forEachTrackKey(section, (li, key) => {
+      if (!li.classList.contains('leave')) oldTops.set(key, li.getBoundingClientRect().top);
+    });
+  }
+
+  renderedUrls = nextUrls;
+  lastRenderedFile = renderedFile;
+  section.innerHTML = dayNavHtml + chipsHtml + captionHtml + barHtml + listHtml;
+
+  if (oldTops.size) {
+    const shifts = [];
+    forEachTrackKey(section, (li, key) => {
+      if (li.classList.contains('enter') || !oldTops.has(key)) return;
+      const dy = oldTops.get(key) - li.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1) shifts.push([li, dy]);
+    });
+    shifts.forEach(([li, dy]) => { li.style.transform = `translateY(${dy}px)`; });
+    section.offsetHeight;  // commit the offset positions before animating back
+    shifts.forEach(([li]) => {
+      li.style.transition = 'transform 0.4s ease';
+      li.style.transform = '';
+      li.addEventListener('transitionend', () => { li.style.transition = ''; }, { once: true });
+    });
+  }
+}
+
+// Keys rows by URL plus occurrence count so duplicate tracks stay distinct.
+function forEachTrackKey(section, fn) {
+  const seen = new Map();
+  section.querySelectorAll('.track[data-url]').forEach(li => {
+    const n = (seen.get(li.dataset.url) || 0) + 1;
+    seen.set(li.dataset.url, n);
+    fn(li, `${li.dataset.url}#${n}`);
+  });
 }
 
 function showTracksEmpty(message) {
+  renderToken++;
+  loadToken++;
+  clearTimeout(loadingTimer);
+  renderedUrls = null;
   document.getElementById('trackSection').innerHTML =
     `<div class="empty-state">${escapeHtml(message)}</div>`;
 }
@@ -1072,9 +1433,9 @@ function elapsedSpan(diffTargetTime, snapTime) {
   return `<span class="snapshot-time-meta">· ${elapsed} ${SINCE_PHRASE}</span>`;
 }
 
-function renderTrackLi(t, cls, badge) {
+function renderTrackLi(t, cls, badge, style = '') {
   return `
-      <li class="${cls}">
+      <li class="${cls}" data-url="${escapeHtml(t.spotify_url)}"${style}>
         ${badge}
         <div class="track-info">
           <div class="track-name">${escapeHtml(t.name)}</div>
@@ -1146,6 +1507,8 @@ function switchPlaylist(playlist) {
   snapshotCache = {};
   lastSnap = null;
   lastEntry = null;
+  renderedUrls = null;
+  lastRenderedFile = null;
   lastPrevSnap = null;
   lastPrevDaySnap = null;
   lastRequestedDate = null;
