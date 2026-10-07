@@ -46,9 +46,13 @@ fetch_tracks() {
   html=$(curl -sfL "https://open.spotify.com/embed/playlist/${playlist_id}" \
     -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
 
-  # Extract __NEXT_DATA__ JSON from the embed page
+  # Extract __NEXT_DATA__ JSON from the embed page. Non-greedy, so a later
+  # <script> on the same line can't get swallowed into the JSON.
   local json
-  json=$(echo "$html" | sed -n 's/.*<script id="__NEXT_DATA__" type="application\/json">\(.*\)<\/script>.*/\1/p')
+  json=$(printf '%s' "$html" | python3 -c '
+import re, sys
+m = re.search(r"<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", sys.stdin.read(), re.S)
+print(m.group(1) if m else "")')
 
   if [ -z "$json" ]; then
     echo "Error: Could not extract track data for playlist $playlist_id" >&2
@@ -208,6 +212,7 @@ generate_index() {
 
 main() {
   local any_changed=false
+  local any_failed=false
   local playlist_count
   playlist_count=$(jq length "$PLAYLISTS_FILE")
 
@@ -217,10 +222,15 @@ main() {
 
     echo "Fetching playlist: $id..."
     local playlist_dir="$SNAPSHOTS_DIR/$id"
-    mkdir -p "$playlist_dir"
 
     local result description
-    result=$(fetch_tracks "$id")
+    # One broken playlist shouldn't stop the others from being recorded.
+    if ! result=$(fetch_tracks "$id"); then
+      echo "::error::Could not fetch tracks for $id; skipping it this run."
+      any_failed=true
+      continue
+    fi
+    mkdir -p "$playlist_dir"
     if ! description=$(fetch_description "$id"); then
       description=$(previous_field "$playlist_dir" description)
     fi
@@ -301,6 +311,9 @@ main() {
   fi
 
   echo "Done."
+  # Exit non-zero so the run shows as failed; the workflow still commits
+  # whatever the other playlists produced.
+  [ "$any_failed" = false ]
 }
 
 main
