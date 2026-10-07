@@ -2,3 +2,4 @@
 .DS_Store
 preview-embed.html
 .gstack/
+.claude/settings.local.json
