@@ -22,7 +22,9 @@ Two safety rules:
 
 1. Fork or clone this repo.
 2. Go to **Settings > Actions > General** and make sure Actions are enabled.
-3. The workflow runs every hour at :13 past (UTC). You can also start it from the **Actions** tab.
+3. The workflow is scheduled hourly at :13 past (UTC), but GitHub delays and drops scheduled runs when Actions is busy. In practice it runs about 3 to 6 times a day, roughly 5 hours apart. You can also start it from the **Actions** tab.
+
+Because of this, a snapshot's time is when a change was noticed, which can be several hours after it actually happened.
 
 If one playlist fails to fetch, the others are still recorded and the run is marked as failed so you notice.
 
