@@ -11,13 +11,20 @@ NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # --- Fetch playlist description from the public page (embed doesn't expose it) ---
 
+# Exit status separates "couldn't read the page" (1, caller keeps the previous
+# description) from "page read fine" (0, empty output means no description).
 fetch_description() {
   local playlist_id="$1"
   local html
   if ! html=$(curl -sfL "https://open.spotify.com/playlist/${playlist_id}" \
     -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"); then
     echo "  Warning: description fetch failed for $playlist_id" >&2
-    return 0
+    return 1
+  fi
+  # A 200 can still be an error or consent page; a real playlist page has og:title.
+  if ! grep -q '<meta property="og:title"' <<< "$html"; then
+    echo "  Warning: playlist page for $playlist_id has no og:title; not trusting it" >&2
+    return 1
   fi
   local raw
   raw=$(echo "$html" \
@@ -214,7 +221,9 @@ main() {
 
     local result description
     result=$(fetch_tracks "$id")
-    description=$(fetch_description "$id")
+    if ! description=$(fetch_description "$id"); then
+      description=$(previous_field "$playlist_dir" description)
+    fi
     local tracks cover_art owner scraped_name track_count
     tracks=$(echo "$result" | jq '.tracks')
     cover_art=$(echo "$result" | jq -r '.cover_art // empty')
@@ -222,12 +231,20 @@ main() {
     scraped_name=$(echo "$result" | jq -r '.playlist_name // empty')
     track_count=$(echo "$tracks" | jq length)
 
+    # An empty list right after a non-empty one is far more likely a bad scrape
+    # than a curator deleting everything; skip it rather than write fake history.
+    local prev_count
+    prev_count=$(previous_field "$playlist_dir" track_count)
+    if [ "$track_count" -eq 0 ] && [ "${prev_count:-0}" -gt 0 ] && [ "${ALLOW_EMPTY:-0}" != "1" ]; then
+      echo "::warning::$id scraped 0 tracks (previous snapshot had $prev_count). Skipping; rerun with ALLOW_EMPTY=1 if the playlist really is empty."
+      continue
+    fi
+
     # Prefer the previous snapshot's value over null when Spotify returns
     # nothing for a field. Prevents transient scrape hiccups from erasing
     # good metadata.
     [ -z "$cover_art" ]    && cover_art=$(previous_field "$playlist_dir" cover_art)
     [ -z "$owner" ]        && owner=$(previous_field "$playlist_dir" owner)
-    [ -z "$description" ]  && description=$(previous_field "$playlist_dir" description)
     [ -z "$scraped_name" ] && scraped_name=$(previous_field "$playlist_dir" playlist_name)
     # Ultimate fallback if we've never scraped a name for this playlist: the id.
     [ -z "$scraped_name" ] && scraped_name="$id"
