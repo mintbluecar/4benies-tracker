@@ -256,10 +256,23 @@
     transition: all 0.12s;
   }
 
+  button.cal-day {
+    border: 0;
+    background: none;
+    font-family: inherit;
+    line-height: inherit;
+    width: 100%;
+  }
+
   .cal-day.has-snapshot {
     color: var(--text);
     cursor: pointer;
     font-weight: 500;
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--green);
+    outline-offset: 2px;
   }
 
   .cal-day.has-snapshot:hover {
@@ -941,9 +954,9 @@ function renderDayNavHtml() {
   const hasNext = idx < dates.length - 1;
   const onToday = selectedDate === todayUtcDate();
   return `<div class="day-nav">
-    <button onclick="navigateDay(-1)"${hasPrev ? '' : ' disabled'}><span class="day-nav-arrow">&#8249;</span>Jump to previous change</button>
+    <button onclick="navigateDay(-1)"${hasPrev ? '' : ' disabled'}><span class="day-nav-arrow" aria-hidden="true">&#8249;</span>Jump to previous change</button>
     <button onclick="goToToday()"${onToday ? ' disabled' : ''}>Today</button>
-    <button onclick="navigateDay(1)"${hasNext ? '' : ' disabled'}>Jump to next change<span class="day-nav-arrow">&#8250;</span></button>
+    <button onclick="navigateDay(1)"${hasNext ? '' : ' disabled'}>Jump to next change<span class="day-nav-arrow" aria-hidden="true">&#8250;</span></button>
   </div>`;
 }
 
@@ -1047,9 +1060,9 @@ function renderCalendar() {
 
   let html = `
     <div class="cal-header">
-      <button onclick="changeMonth(-1)">&#8249;</button>
+      <button onclick="changeMonth(-1)" aria-label="Previous month">&#8249;</button>
       <span class="month-label">${monthNames[calMonth]} ${calYear}</span>
-      <button onclick="changeMonth(1)">&#8250;</button>
+      <button onclick="changeMonth(1)" aria-label="Next month">&#8250;</button>
     </div>
     <div class="cal-grid">
       <div class="cal-dow">Su</div><div class="cal-dow">Mo</div>
@@ -1072,8 +1085,12 @@ function renderCalendar() {
     if (canRender) classes.push('has-snapshot');
     if (isSnapshotDate) classes.push('changed');
     if (isSelected) classes.push('selected');
-    const onclick = canRender ? ` onclick="selectDate('${dateStr}')"` : '';
-    html += `<div class="${classes.join(' ')}"${onclick}>${d}</div>`;
+    if (canRender) {
+      const label = `${monthNames[calMonth]} ${d}, ${calYear}${isSnapshotDate ? ', playlist changed' : ''}`;
+      html += `<button type="button" class="${classes.join(' ')}" aria-label="${label}" aria-pressed="${isSelected}" onclick="selectDate('${dateStr}')">${d}</button>`;
+    } else {
+      html += `<div class="${classes.join(' ')}">${d}</div>`;
+    }
   }
 
   const totalCells = firstDay + daysInMonth;
